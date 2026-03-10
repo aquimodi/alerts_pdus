@@ -25,13 +25,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     checkSession();
   }, []);
 
+  const parseJsonResponse = async (response: Response) => {
+    const contentType = response.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+      throw new Error('El servidor API no está disponible. Verifique que el servicio backend esté en ejecución.');
+    }
+    return response.json();
+  };
+
   const checkSession = async () => {
     try {
       const response = await fetch('/api/auth/session', {
         credentials: 'include'
       });
 
-      const data = await response.json();
+      const data = await parseJsonResponse(response);
 
       if (data.success && data.authenticated && data.user) {
         setUser(data.user);
@@ -47,26 +55,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const login = async (usuario: string, password: string) => {
-    try {
-      const response = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include',
-        body: JSON.stringify({ usuario, password }),
-      });
+    const response = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      credentials: 'include',
+      body: JSON.stringify({ usuario, password }),
+    });
 
-      const data = await response.json();
+    const data = await parseJsonResponse(response);
 
-      if (!response.ok || !data.success) {
-        throw new Error(data.message || 'Error al iniciar sesión');
-      }
-
-      setUser(data.user);
-    } catch (error) {
-      throw error;
+    if (!response.ok || !data.success) {
+      throw new Error(data.message || 'Error al iniciar sesión');
     }
+
+    setUser(data.user);
   };
 
   const logout = async () => {
@@ -75,10 +79,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         method: 'POST',
         credentials: 'include',
       });
-
-      setUser(null);
     } catch (error) {
       console.error('Error logging out:', error);
+    } finally {
       setUser(null);
     }
   };
