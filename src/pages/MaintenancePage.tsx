@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react';
 import { Wrench, Calendar, User, MapPin, Server, AlertCircle, X, Trash2, ChevronDown, ChevronUp, Upload, XCircle, Download } from 'lucide-react';
 import ImportMaintenanceModal from '../components/ImportMaintenanceModal';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../utils/supabaseClient';
 
 interface RackDetail {
   rack_id: string;
@@ -47,9 +46,25 @@ export default function MaintenancePage() {
   const handleDownloadTemplate = async () => {
     try {
       setDownloadingTemplate(true);
-      alert('La plantilla de importacion no esta disponible en este modo. Use la funcion de importacion directa.');
+      const response = await fetch('/api/maintenance/template', {
+        credentials: 'include'
+      });
+      if (!response.ok) {
+        throw new Error('Error al descargar la plantilla');
+      }
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'plantilla_mantenimiento_racks.xlsx';
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
     } catch (err) {
       console.error('Error downloading template:', err);
+      alert('Error al descargar la plantilla');
     } finally {
       setDownloadingTemplate(false);
     }
@@ -101,51 +116,30 @@ export default function MaintenancePage() {
       setLoading(true);
       setError(null);
 
-      const { data: entries, error: fetchError } = await supabase
-        .from('maintenance_entries')
-        .select('*')
-        .order('started_at', { ascending: false });
+      const timestamp = new Date().getTime();
+      const response = await fetch(`/api/maintenance?t=${timestamp}`, {
+        cache: 'no-store',
+        credentials: 'include',
+        headers: {
+          'Cache-Control': 'no-cache',
+          'Pragma': 'no-cache'
+        }
+      });
 
-      if (fetchError) throw fetchError;
-
-      const entriesWithRacks: MaintenanceEntry[] = [];
-      for (const entry of entries || []) {
-        const { data: racks } = await supabase
-          .from('maintenance_rack_details')
-          .select('*')
-          .eq('entry_id', entry.id);
-
-        entriesWithRacks.push({
-          id: entry.id,
-          entry_type: entry.entry_type,
-          rack_id: entry.rack_id,
-          chain: entry.chain,
-          site: entry.site,
-          dc: entry.dc,
-          reason: entry.reason,
-          user: entry.started_by,
-          started_at: entry.started_at,
-          started_by: entry.started_by,
-          created_at: entry.created_at,
-          racks: (racks || []).map(r => ({
-            rack_id: r.rack_id,
-            name: r.name,
-            country: r.country,
-            site: r.site,
-            dc: r.dc,
-            phase: r.phase,
-            chain: r.chain,
-            node: r.node,
-            gwName: r.gw_name,
-            gwIp: r.gw_ip,
-          })),
-        });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
 
-      setMaintenanceEntries(entriesWithRacks);
+      const data = await response.json();
+
+      if (!data.success) {
+        throw new Error(data.message || 'Failed to fetch maintenance entries');
+      }
+
+      setMaintenanceEntries(data.data || []);
     } catch (err) {
       console.error('Error fetching maintenance entries:', err);
-      setError(err instanceof Error ? err.message : 'Error desconocido');
+      setError(err instanceof Error ? err.message : 'Unknown error occurred');
     } finally {
       setLoading(false);
     }
@@ -176,12 +170,23 @@ export default function MaintenancePage() {
     try {
       setRemovingEntryId(entryId);
 
-      const { error: deleteError } = await supabase
-        .from('maintenance_entries')
-        .delete()
-        .eq('id', entryId);
+      const response = await fetch(`/api/maintenance/entry/${encodeURIComponent(entryId)}`, {
+        method: 'DELETE',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
 
-      if (deleteError) throw deleteError;
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+
+      if (!data.success) {
+        throw new Error(data.message || 'Failed to remove from maintenance');
+      }
 
       await fetchMaintenanceEntries();
     } catch (err) {
@@ -210,12 +215,23 @@ export default function MaintenancePage() {
     try {
       setRemovingRackId(rackId);
 
-      const { error: deleteError } = await supabase
-        .from('maintenance_rack_details')
-        .delete()
-        .eq('rack_id', rackId);
+      const response = await fetch(`/api/maintenance/rack/${encodeURIComponent(rackId)}`, {
+        method: 'DELETE',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
 
-      if (deleteError) throw deleteError;
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+
+      if (!data.success) {
+        throw new Error(data.message || 'Failed to remove rack from maintenance');
+      }
 
       await fetchMaintenanceEntries();
     } catch (err) {
@@ -251,14 +267,25 @@ export default function MaintenancePage() {
     try {
       setRemovingAll(true);
 
-      const { error: deleteError } = await supabase
-        .from('maintenance_entries')
-        .delete()
-        .neq('id', '00000000-0000-0000-0000-000000000000');
+      const response = await fetch('/api/maintenance/all', {
+        method: 'DELETE',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
 
-      if (deleteError) throw deleteError;
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
 
-      alert('Todas las entradas de mantenimiento han sido eliminadas');
+      const data = await response.json();
+
+      if (!data.success) {
+        throw new Error(data.message || 'Failed to remove all maintenance entries');
+      }
+
+      alert(`✅ ${data.data.entriesRemoved} entradas de mantenimiento eliminadas (${data.data.racksRemoved} racks)`);
       await fetchMaintenanceEntries();
     } catch (err) {
       console.error('Error removing all maintenance entries:', err);

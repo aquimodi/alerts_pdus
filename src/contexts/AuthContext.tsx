@@ -1,5 +1,4 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { supabase } from '../utils/supabaseClient';
 
 export interface User {
   id: string;
@@ -18,61 +17,32 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-function toEmail(usuario: string): string {
-  return `${usuario.toLowerCase().replace(/\s+/g, '_')}@energy.local`;
-}
-
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     checkSession();
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
-      if (event === 'SIGNED_OUT') {
-        setUser(null);
-      }
-      if (event === 'SIGNED_IN') {
-        (async () => { await loadProfile(); })();
-      }
-    });
-
-    return () => subscription.unsubscribe();
   }, []);
 
-  const loadProfile = async () => {
-    const { data: { user: authUser } } = await supabase.auth.getUser();
-    if (!authUser) {
-      setUser(null);
-      return;
+  const parseJsonResponse = async (response: Response) => {
+    const contentType = response.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+      throw new Error('El servidor API no está disponible. Verifique que el servicio backend esté en ejecución.');
     }
-
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', authUser.id)
-      .maybeSingle();
-
-    if (profile) {
-      setUser({
-        id: profile.id,
-        usuario: profile.usuario,
-        rol: profile.rol,
-        sitios_asignados: profile.sitios_asignados && profile.sitios_asignados.length > 0
-          ? profile.sitios_asignados
-          : null,
-      });
-    } else {
-      setUser(null);
-    }
+    return response.json();
   };
 
   const checkSession = async () => {
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session) {
-        await loadProfile();
+      const response = await fetch('/api/auth/session', {
+        credentials: 'include'
+      });
+
+      const data = await parseJsonResponse(response);
+
+      if (data.success && data.authenticated && data.user) {
+        setUser(data.user);
       } else {
         setUser(null);
       }
@@ -85,22 +55,35 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const login = async (usuario: string, password: string) => {
-    const email = toEmail(usuario);
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    const response = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      credentials: 'include',
+      body: JSON.stringify({ usuario, password }),
+    });
 
-    if (error) {
-      if (error.message.includes('Invalid login credentials')) {
-        throw new Error('Usuario o contrasena incorrectos');
-      }
-      throw new Error(error.message);
+    const data = await parseJsonResponse(response);
+
+    if (!response.ok || !data.success) {
+      throw new Error(data.message || 'Error al iniciar sesión');
     }
 
-    await loadProfile();
+    setUser(data.user);
   };
 
   const logout = async () => {
-    await supabase.auth.signOut();
-    setUser(null);
+    try {
+      await fetch('/api/auth/logout', {
+        method: 'POST',
+        credentials: 'include',
+      });
+    } catch (error) {
+      console.error('Error logging out:', error);
+    } finally {
+      setUser(null);
+    }
   };
 
   const value: AuthContextType = {

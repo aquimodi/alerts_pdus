@@ -1,10 +1,5 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { ThresholdData } from '../types';
-import { supabase } from '../utils/supabaseClient';
-
-interface UseThresholdsOptions {
-  rackId?: string;
-}
 
 interface UseThresholdsReturn {
   thresholds: ThresholdData[];
@@ -12,73 +7,114 @@ interface UseThresholdsReturn {
   globalThresholds: ThresholdData[];
   loading: boolean;
   error: string | null;
-  refreshThresholds: () => Promise<void>;
+  refreshThresholds: () => void;
+}
+
+interface UseThresholdsOptions {
+  rackId?: string;
 }
 
 export function useThresholds(options: UseThresholdsOptions = {}): UseThresholdsReturn {
   const { rackId } = options;
-  const [globalThresholds, setGlobalThresholds] = useState<ThresholdData[]>([]);
+  const [thresholds, setThresholds] = useState<ThresholdData[]>([]);
   const [rackSpecificThresholds, setRackSpecificThresholds] = useState<ThresholdData[]>([]);
+  const [globalThresholds, setGlobalThresholds] = useState<ThresholdData[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchThresholds = useCallback(async () => {
+  const fetchThresholds = async () => {
     try {
       setLoading(true);
       setError(null);
 
-      const { data: globalData, error: globalError } = await supabase
-        .from('threshold_configs')
-        .select('*')
-        .order('threshold_key');
-
-      if (globalError) throw globalError;
-
-      const globals: ThresholdData[] = (globalData || []).map(row => ({
-        key: row.threshold_key,
-        value: Number(row.value),
-        unit: row.unit || '',
-        description: row.description || '',
-      }));
-      setGlobalThresholds(globals);
+      // Add timestamp to prevent caching
+      const timestamp = new Date().getTime();
+      const fetchOptions = {
+        cache: 'no-store' as RequestCache,
+        credentials: 'include' as RequestCredentials,
+        headers: {
+          'Cache-Control': 'no-cache',
+          'Pragma': 'no-cache'
+        }
+      };
 
       if (rackId) {
-        const { data: overrides, error: overridesError } = await supabase
-          .from('rack_threshold_overrides')
-          .select('*')
-          .eq('rack_id', rackId);
+        // Fetch rack-specific thresholds
+        const response = await fetch(`/api/racks/${rackId}/thresholds?t=${timestamp}`, fetchOptions);
 
-        if (overridesError) throw overridesError;
+        // If unauthorized, silently fail (user not logged in yet)
+        if (response.status === 401) {
+          setLoading(false);
+          return;
+        }
 
-        const rackOverrides: ThresholdData[] = (overrides || []).map(row => ({
-          key: row.threshold_key,
-          value: Number(row.value),
-          unit: row.unit || '',
-          description: row.description || '',
-        }));
-        setRackSpecificThresholds(rackOverrides);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        
+        const data = await response.json();
+        if (!data.success) {
+          throw new Error(data.message || 'Failed to fetch rack-specific thresholds');
+        }
+        
+        setRackSpecificThresholds(data.data.rackSpecific || []);
+        setGlobalThresholds(data.data.global || []);
+        
+        // Create merged thresholds with rack-specific overrides taking precedence
+        const mergedThresholds = [...data.data.global];
+        data.data.rackSpecific.forEach((rackThreshold: ThresholdData) => {
+          const index = mergedThresholds.findIndex(t => t.key === rackThreshold.key);
+          if (index >= 0) {
+            mergedThresholds[index] = rackThreshold;
+          } else {
+            mergedThresholds.push(rackThreshold);
+          }
+        });
+        
+        setThresholds(mergedThresholds);
       } else {
+        // Fetch global thresholds only
+        const response = await fetch(`/api/thresholds?t=${timestamp}`, fetchOptions);
+
+        // If unauthorized, silently fail (user not logged in yet)
+        if (response.status === 401) {
+          setLoading(false);
+          return;
+        }
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        if (!data.success) {
+          throw new Error(data.message || 'Failed to fetch thresholds');
+        }
+
+        // Log voltage thresholds for verification
+        setThresholds(data.data || []);
+        setGlobalThresholds(data.data || []);
         setRackSpecificThresholds([]);
       }
     } catch (err) {
-      console.error('Error fetching thresholds:', err);
-      setError(err instanceof Error ? err.message : 'Error al cargar umbrales');
+      console.error(`Error fetching thresholds${rackId ? ` for rack ${rackId}` : ''}:`, err);
+      setError(err instanceof Error ? err.message : 'Unknown error occurred');
     } finally {
       setLoading(false);
     }
-  }, [rackId]);
+  };
 
   useEffect(() => {
-    fetchThresholds();
-  }, [fetchThresholds]);
+    // Small delay to ensure component is fully mounted and authenticated
+    const initTimer = setTimeout(() => {
+      fetchThresholds();
+    }, 100);
 
-  const mergedThresholds = globalThresholds.map(global => {
-    const override = rackSpecificThresholds.find(r => r.key === global.key);
-    return override || global;
-  });
+    return () => clearTimeout(initTimer);
+  }, [rackId]);
 
   return {
-    thresholds: rackId ? mergedThresholds : globalThresholds,
+    thresholds,
     rackSpecificThresholds,
     globalThresholds,
     loading,
