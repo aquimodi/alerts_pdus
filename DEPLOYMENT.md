@@ -61,6 +61,7 @@ energy-monitoring-system/
 |-- server.cjs                     # Backend Express (API + logica de negocio)
 |-- ecosystem.config.cjs           # Configuracion PM2 (gestion de procesos)
 |-- nginx.conf                     # Configuracion Nginx (reverse proxy)
+|-- monitor-nginx.ps1              # Script PowerShell de monitorizacion de Nginx
 |-- .env                           # Variables de entorno (NO subir a git)
 |-- .env.example                   # Plantilla de variables de entorno
 |-- package.json                   # Dependencias y scripts npm
@@ -276,226 +277,140 @@ Nginx actua como:
 - **Cache**: Cache de assets estaticos (JS, CSS, imagenes) con expiracion de 1 anio
 - **Seguridad**: Headers de seguridad (X-Frame-Options, X-Content-Type-Options, etc.)
 
-### 6.2 PROBLEMA CONOCIDO: Nginx se apaga periodicamente
+### 6.2 Problemas Identificados y Soluciones Aplicadas
 
-**Causa raiz identificada: Nginx en Windows NO es un servicio nativo.**
+Se identificaron 6 problemas en la configuracion original de Nginx que podian causar paradas silenciosas. Todos han sido corregidos en el `nginx.conf` actual:
 
-A diferencia de Linux, Nginx en Windows se ejecuta como un proceso de consola simple, no como un servicio del sistema. Esto causa los siguientes problemas:
+#### Problema 1: Nivel de log insuficiente
 
-1. **Sin auto-reinicio**: Si el proceso muere por cualquier razon (error, falta de memoria, cierre accidental de la terminal), no hay nada que lo reinicie automaticamente.
+- **Antes**: `error_log logs/error.log warn` (descartaba eventos `notice` e `info`)
+- **Ahora**: `error_log D:/nginx/logs/error.log info` (captura TODO el ciclo de vida: arranque, parada, senales, workers)
+- **Impacto**: Nginx logueaba la parada como evento `notice` o `info`, que el nivel `warn` descartaba. Por eso `error.log` estaba vacio tras cada parada.
 
-2. **`use select;` en lugar de `epoll`**: La directiva `events { use select; }` en el `nginx.conf` es correcta para Windows (Windows no soporta epoll/kqueue), pero el modelo `select` tiene limitaciones de rendimiento y escalabilidad.
+#### Problema 2: Upstream sin control de fallos
 
-3. **Worker processes `auto`**: En Windows, `worker_processes auto` puede generar multiples workers que compiten por el mismo socket, causando inestabilidad. **Debe ser `1` en Windows.**
+- **Antes**: `server 127.0.0.1:3001;` (sin `max_fails` ni `fail_timeout`)
+- **Ahora**: `server 127.0.0.1:3001 max_fails=3 fail_timeout=30s;`
+- **Impacto**: Sin estas directivas, Nginx nunca marcaba el backend como caido y acumulaba sockets rotos en Windows.
 
-4. **Directorios temporales inexistentes**: Si los directorios temp no existen al arrancar, Nginx falla silenciosamente o se cierra.
+#### Problema 3: Sin `proxy_next_upstream`
 
-5. **Logs no rotados**: Sin rotacion de logs, los archivos crecen indefinidamente y pueden causar que Nginx se quede sin espacio o se vuelva lento.
+- **Antes**: No existia la directiva
+- **Ahora**: `proxy_next_upstream error timeout http_502 http_503;`
+- **Impacto**: Ahora Nginx salta automaticamente al backup (3002) cuando el primario falla.
 
-6. **Backend caido + proxy_pass**: Si el backend Node.js se cae y no hay `proxy_next_upstream`, Nginx devuelve 502 pero sigue funcionando. Sin embargo, si el upstream completo esta caido durante mucho tiempo, Nginx puede comportarse de forma impredecible en Windows.
+#### Problema 4: Directorios temporales con rutas relativas
 
-### 6.3 Solucion: Nginx como Servicio de Windows
+- **Antes**: `client_body_temp_path temp/client_body_temp;`
+- **Ahora**: `client_body_temp_path D:/nginx/temp/client_body_temp;`
+- **Impacto**: Si Nginx se arrancaba desde un directorio diferente, las rutas relativas apuntaban a otro sitio y Nginx se cerraba sin dejar log.
 
-Para que Nginx se mantenga activo permanentemente, se debe registrar como servicio de Windows usando **NSSM** (Non-Sucking Service Manager) o **WinSW**.
+#### Problema 5: Sin `worker_shutdown_timeout`
 
-#### Opcion A: Usando NSSM (Recomendado)
+- **Antes**: No existia la directiva
+- **Ahora**: `worker_shutdown_timeout 10s;`
+- **Impacto**: Al hacer reload, un worker con una conexion colgada (proxy_read_timeout de 300s) podia quedarse bloqueado indefinidamente, causando conflictos.
+
+#### Problema 6: `error_page 404` apuntando a fichero inexistente
+
+- **Antes**: `error_page 404 /404.html;` (el fichero no existia)
+- **Ahora**: Eliminado. La SPA ya maneja el 404 con `try_files $uri $uri/ /index.html`.
+
+### 6.3 Sistema de Logs de Nginx
+
+El `nginx.conf` actual genera **5 ficheros de log** independientes, cada uno con un proposito especifico:
+
+| Fichero | Contenido | Uso |
+|---------|-----------|-----|
+| `error.log` | Ciclo de vida de Nginx: arranque, parada, senales, errores de workers, problemas de configuracion. **Nivel `info`** para maxima captura. | **Diagnosticar paradas.** Buscar las ultimas lineas antes de que el proceso desaparezca. |
+| `energy-monitor-error.log` | Errores del server block de la aplicacion: errores de proxy, ficheros no encontrados, timeouts. **Nivel `info`.** | Diagnosticar errores HTTP y problemas de routing. |
+| `access.log` | Todas las peticiones HTTP generales. | Monitoreo de trafico general. |
+| `energy-monitor-access.log` | Peticiones HTTP al virtual host de la aplicacion. | Monitoreo de trafico de la app. |
+| `upstream-debug.log` | **Solo peticiones a `/api/*`** con formato extendido que incluye: estado del upstream, IP del upstream que respondio, tiempo de respuesta del upstream, tiempo de conexion, y tiempo total de la peticion. | **Diagnosticar problemas del backend.** Ver si el backend deja de responder antes de que Nginx se pare. |
+
+#### Ejemplo de linea en `upstream-debug.log`
+
+```
+192.168.1.50 [10/Mar/2026:14:32:01 +0100] "GET /api/racks/energy?t=1741614721000 HTTP/1.1"
+status=200 upstream_status=200 upstream_addr=127.0.0.1:3001
+upstream_response_time=0.345 request_time=0.346 upstream_connect_time=0.001
+body_bytes=52840
+```
+
+Si ves una linea como esta justo antes de la parada, sabes que el backend respondia correctamente:
+```
+status=502 upstream_status=502 upstream_addr=127.0.0.1:3001
+upstream_response_time=- request_time=10.001 upstream_connect_time=-
+```
+Esto indicaria que el backend estaba caido (502, tiempos en `-`).
+
+#### Como diagnosticar una parada
+
+1. Abrir `D:\nginx\logs\error.log` y buscar las ultimas lineas. Con el nivel `info`, Nginx registra:
+   - `signal process started` (al arrancar)
+   - `worker process <PID> exited` (si un worker muere)
+   - `signal <N> received` (si recibe SIGTERM, SIGINT, etc.)
+   - `getpid() is not <PID>` (conflicto de PIDs, otro Nginx intenta arrancar)
+   - `CreateDirectory() ... failed` (fallo de directorio temporal)
+
+2. Abrir `D:\nginx\logs\upstream-debug.log` y buscar las ultimas peticiones `/api/`. Si hay muchos `status=502` consecutivos con `upstream_response_time=-`, el backend estaba caido.
+
+3. Abrir `D:\nginx\logs\nginx-monitor.log` (generado por el script PowerShell). Si hay entradas de "Nginx NO esta activo. Iniciando...", confirma que el proceso se detuvo y el monitor lo reinicio.
+
+### 6.4 Monitorizacion Automatica (Sin Software Externo)
+
+El script `monitor-nginx.ps1` usa unicamente herramientas nativas de Windows (PowerShell + Tarea Programada) para garantizar que Nginx se mantiene activo:
+
+#### Que hace el script
+
+1. Comprueba si existe algun proceso `nginx.exe` activo
+2. Si existe, verifica que realmente este escuchando en el puerto 80
+3. Si no hay proceso o no escucha, reinicia Nginx automaticamente
+4. Antes de reiniciar, verifica la configuracion con `nginx -t`
+5. Antes de reiniciar, crea los directorios temporales si faltan
+6. Registra todos los eventos en `D:\nginx\logs\nginx-monitor.log`
+7. Rota automaticamente el log cuando supera 50MB
+
+#### Instalacion como Tarea Programada
 
 ```powershell
-# 1. Descargar NSSM desde https://nssm.cc/download
-# 2. Extraer nssm.exe en D:\nginx\ o en una carpeta del PATH
+# Copiar el script al directorio de Nginx
+Copy-Item .\monitor-nginx.ps1 D:\nginx\monitor-nginx.ps1
 
-# 3. Instalar Nginx como servicio
-nssm install nginx "D:\nginx\nginx.exe"
-
-# 4. Configurar el directorio de trabajo (CRITICO)
-nssm set nginx AppDirectory "D:\nginx"
-
-# 5. Configurar reinicio automatico ante fallos
-nssm set nginx AppRestartDelay 5000
-nssm set nginx AppStopMethodSkip 6
-nssm set nginx AppExit Default Restart
-
-# 6. Configurar logs de NSSM
-nssm set nginx AppStdout "D:\nginx\logs\nssm-stdout.log"
-nssm set nginx AppStderr "D:\nginx\logs\nssm-stderr.log"
-
-# 7. Iniciar el servicio
-nssm start nginx
+# Instalar la tarea programada (requiere Administrador)
+powershell -ExecutionPolicy Bypass -File D:\nginx\monitor-nginx.ps1 -Install
 ```
 
-#### Opcion B: Usando WinSW
+Esto crea una tarea llamada `NginxMonitor` que:
+- Se ejecuta al iniciar el sistema operativo
+- Se repite cada 1 minuto
+- Se ejecuta como SYSTEM con maximos privilegios
+- Se reinicia automaticamente si falla (hasta 3 reintentos)
+- Tiene un tiempo limite de ejecucion de 5 minutos
 
-1. Descargar WinSW desde https://github.com/winsw/winsw/releases
-2. Renombrar el ejecutable a `nginx-service.exe` y colocarlo en `D:\nginx\`
-3. Crear `D:\nginx\nginx-service.xml`:
-
-```xml
-<service>
-  <id>nginx</id>
-  <name>Nginx</name>
-  <description>Nginx HTTP Server for Energy Monitoring</description>
-  <executable>D:\nginx\nginx.exe</executable>
-  <logpath>D:\nginx\logs</logpath>
-  <log mode="roll-by-size">
-    <sizeThreshold>10240</sizeThreshold>
-    <keepFiles>5</keepFiles>
-  </log>
-  <onfailure action="restart" delay="5 sec"/>
-  <onfailure action="restart" delay="10 sec"/>
-  <onfailure action="restart" delay="30 sec"/>
-  <startmode>Automatic</startmode>
-  <workingdirectory>D:\nginx</workingdirectory>
-</service>
-```
-
-4. Instalar y arrancar:
-```powershell
-D:\nginx\nginx-service.exe install
-D:\nginx\nginx-service.exe start
-```
-
-#### Verificar que el servicio funciona
+#### Desinstalacion
 
 ```powershell
-# Comprobar estado del servicio
-sc query nginx
-
-# Verificar que Nginx responde
-Invoke-WebRequest -Uri http://localhost/health -UseBasicParsing
-
-# Ver logs de errores
-Get-Content D:\nginx\logs\error.log -Tail 20
+powershell -ExecutionPolicy Bypass -File D:\nginx\monitor-nginx.ps1 -Uninstall
 ```
 
-### 6.4 Configuracion de Nginx Corregida
+#### Ejecucion manual (para pruebas)
 
-A continuacion se muestra la configuracion recomendada con las correcciones necesarias para estabilidad en Windows:
-
-```nginx
-# CRITICO: En Windows usar SIEMPRE 1 worker
-worker_processes 1;
-error_log logs/error.log warn;
-pid logs/nginx.pid;
-
-events {
-    worker_connections 1024;
-    # "select" es el unico metodo estable en Windows (NO cambiar)
-    use select;
-}
-
-http {
-    include       mime.types;
-    default_type  application/octet-stream;
-
-    # Directorios temporales (deben existir ANTES de arrancar)
-    client_body_temp_path temp/client_body_temp;
-    proxy_temp_path temp/proxy_temp;
-    fastcgi_temp_path temp/fastcgi_temp;
-    uwsgi_temp_path temp/uwsgi_temp;
-    scgi_temp_path temp/scgi_temp;
-
-    log_format main '$remote_addr - $remote_user [$time_local] "$request" '
-                    '$status $body_bytes_sent "$http_referer" '
-                    '"$http_user_agent"';
-
-    access_log logs/access.log main;
-
-    sendfile on;
-    tcp_nopush on;
-    tcp_nodelay on;
-    keepalive_timeout 65;
-    types_hash_max_size 2048;
-    client_max_body_size 10M;
-
-    gzip on;
-    gzip_vary on;
-    gzip_min_length 1024;
-    gzip_types text/plain text/css text/xml text/javascript
-               application/javascript application/json application/xml+rss;
-
-    # Headers de seguridad
-    add_header X-Frame-Options "SAMEORIGIN" always;
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header X-XSS-Protection "1; mode=block" always;
-    add_header Referrer-Policy "no-referrer-when-downgrade" always;
-
-    # Upstream del backend Node.js
-    upstream energy_api {
-        server 127.0.0.1:3001;
-        server 127.0.0.1:3002 backup;
-        keepalive 32;
-    }
-
-    server {
-        listen 80;
-        server_name localhost energy-monitor.local;
-        root D:/nginx/pdus/dist;
-        index index.html;
-
-        access_log logs/energy-monitor-access.log main;
-        error_log logs/energy-monitor-error.log;
-        server_tokens off;
-
-        # SPA - Todas las rutas caen a index.html
-        location / {
-            try_files $uri $uri/ /index.html;
-
-            # Cache agresivo para assets con hash en el nombre
-            location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
-                expires 1y;
-                add_header Cache-Control "public, no-transform";
-            }
-        }
-
-        # Proxy al backend Express
-        location /api/ {
-            proxy_pass http://energy_api;
-            proxy_http_version 1.1;
-            proxy_set_header Upgrade $http_upgrade;
-            proxy_set_header Connection 'upgrade';
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto $scheme;
-            proxy_cache_bypass $http_upgrade;
-            proxy_read_timeout 300s;
-            proxy_connect_timeout 10s;
-            proxy_send_timeout 300s;
-
-            add_header Access-Control-Allow-Origin *;
-            add_header Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS";
-            add_header Access-Control-Allow-Headers "Content-Type, Authorization";
-        }
-
-        # Health check
-        location /health {
-            access_log off;
-            return 200 "healthy\n";
-            add_header Content-Type text/plain;
-        }
-
-        error_page 404 /index.html;
-        error_page 500 502 503 504 /50x.html;
-
-        location = /50x.html {
-            root D:/nginx/html;
-        }
-    }
-}
+```powershell
+powershell -ExecutionPolicy Bypass -File D:\nginx\monitor-nginx.ps1
 ```
 
-**Cambios criticos respecto a la configuracion original:**
+#### Verificar que la tarea esta activa
 
-1. `worker_processes 1;` en lugar de `auto` (estabilidad en Windows)
-2. Nivel de error_log cambiado a `warn` para mejor diagnostico
-3. Se eliminaron comentarios de HTTPS no usados para reducir complejidad
+```powershell
+Get-ScheduledTask -TaskName "NginxMonitor" | Format-List TaskName, State, LastRunTime, NextRunTime
+```
 
 ### 6.5 Preparacion del Entorno Nginx
 
 Antes de iniciar Nginx, estos directorios **deben existir**:
 
 ```powershell
-# Crear todos los directorios necesarios
 New-Item -ItemType Directory -Force -Path @(
     "D:\nginx\temp\client_body_temp",
     "D:\nginx\temp\proxy_temp",
@@ -503,7 +418,8 @@ New-Item -ItemType Directory -Force -Path @(
     "D:\nginx\temp\uwsgi_temp",
     "D:\nginx\temp\scgi_temp",
     "D:\nginx\pdus\dist",
-    "D:\nginx\logs"
+    "D:\nginx\logs",
+    "D:\nginx\html"
 )
 ```
 
@@ -512,13 +428,16 @@ New-Item -ItemType Directory -Force -Path @(
 ```
 D:\nginx\
 |-- nginx.exe
+|-- monitor-nginx.ps1              <-- Script de monitorizacion
 |-- conf\
 |   `-- nginx.conf
 |-- logs\
-|   |-- access.log
-|   |-- error.log
-|   |-- energy-monitor-access.log
-|   `-- energy-monitor-error.log
+|   |-- error.log                  <-- Ciclo de vida (nivel info)
+|   |-- access.log                 <-- Trafico general
+|   |-- energy-monitor-access.log  <-- Trafico de la app
+|   |-- energy-monitor-error.log   <-- Errores del server block (nivel info)
+|   |-- upstream-debug.log         <-- Diagnostico del backend (tiempos, estados)
+|   `-- nginx-monitor.log          <-- Log del script de monitorizacion
 |-- temp\
 |   |-- client_body_temp\
 |   |-- proxy_temp\
@@ -526,14 +445,14 @@ D:\nginx\
 |   |-- uwsgi_temp\
 |   `-- scgi_temp\
 |-- pdus\
-|   `-- dist\              <-- Aqui va el build de React
+|   `-- dist\                      <-- Build de React
 |       |-- index.html
 |       `-- assets\
 |           |-- index-[hash].js
 |           |-- index-[hash].css
 |           `-- vendor-[hash].js
 `-- html\
-    `-- 50x.html           <-- Pagina de error por defecto
+    `-- 50x.html                   <-- Pagina de error por defecto
 ```
 
 ---
@@ -546,12 +465,11 @@ D:\nginx\
 - Node.js >= 16.0.0 y npm >= 8.0.0
 - SQL Server 2017+ (con autenticacion SQL activada)
 - Nginx para Windows (descargar de https://nginx.org/en/download.html - version estable)
-- NSSM (descargar de https://nssm.cc/download) para registrar Nginx como servicio
+- Privilegios de administrador local en el servidor
 
 ### 7.2 Paso 1: Instalar la Base de Datos
 
 ```bash
-# Conectar a SQL Server y ejecutar el script
 sqlcmd -S localhost -U sa -P <tu_password> -i sql/CompleteDataBase.sql
 ```
 
@@ -565,11 +483,10 @@ Resultado esperado: 8 tablas listadas.
 ### 7.3 Paso 2: Configurar Variables de Entorno
 
 ```bash
-# Copiar plantilla
 copy .env.example .env
-
-# Editar .env con los valores reales (ver seccion 5)
 ```
+
+Editar `.env` con los valores reales (ver seccion 5).
 
 ### 7.4 Paso 3: Instalar Dependencias y Compilar
 
@@ -583,14 +500,16 @@ Esto genera la carpeta `dist/` con los archivos estaticos del frontend.
 ### 7.5 Paso 4: Configurar Nginx
 
 ```powershell
-# 1. Crear directorios temporales y de la app
+# 1. Crear directorios
 New-Item -ItemType Directory -Force -Path @(
     "D:\nginx\temp\client_body_temp",
     "D:\nginx\temp\proxy_temp",
     "D:\nginx\temp\fastcgi_temp",
     "D:\nginx\temp\uwsgi_temp",
     "D:\nginx\temp\scgi_temp",
-    "D:\nginx\pdus\dist"
+    "D:\nginx\pdus\dist",
+    "D:\nginx\logs",
+    "D:\nginx\html"
 )
 
 # 2. Copiar configuracion de Nginx
@@ -599,45 +518,37 @@ Copy-Item .\nginx.conf D:\nginx\conf\nginx.conf -Force
 # 3. Copiar build del frontend
 Copy-Item -Recurse -Force .\dist\* D:\nginx\pdus\dist\
 
-# 4. Verificar configuracion
+# 4. Copiar script de monitorizacion
+Copy-Item .\monitor-nginx.ps1 D:\nginx\monitor-nginx.ps1 -Force
+
+# 5. Verificar configuracion
 cd D:\nginx
 .\nginx.exe -t
 # Resultado esperado: "syntax is ok" y "test is successful"
 ```
 
-### 7.6 Paso 5: Registrar Nginx como Servicio (Resuelve el problema de apagado)
+### 7.6 Paso 5: Instalar Monitor de Nginx (Tarea Programada)
 
 ```powershell
-# Usando NSSM (ver seccion 6.3 para detalles)
-nssm install nginx "D:\nginx\nginx.exe"
-nssm set nginx AppDirectory "D:\nginx"
-nssm set nginx AppRestartDelay 5000
-nssm set nginx AppExit Default Restart
-nssm set nginx AppStdout "D:\nginx\logs\nssm-stdout.log"
-nssm set nginx AppStderr "D:\nginx\logs\nssm-stderr.log"
-nssm start nginx
+# Instalar la tarea programada (requiere PowerShell como Administrador)
+powershell -ExecutionPolicy Bypass -File D:\nginx\monitor-nginx.ps1 -Install
 ```
+
+Esto registra una tarea nativa de Windows que arranca Nginx al inicio del sistema y lo reinicia automaticamente si se detiene. No requiere ningun software externo.
 
 ### 7.7 Paso 6: Iniciar el Backend
 
 #### Opcion A: Con PM2 (Recomendado para produccion)
 
 ```bash
-# Instalar PM2 globalmente
 npm install -g pm2
-
-# Iniciar con configuracion del proyecto
 pm2 start ecosystem.config.cjs --env production
-
-# Guardar configuracion para auto-inicio
 pm2 save
-
-# Configurar inicio automatico con el sistema
 pm2-startup install
 ```
 
 **Configuracion PM2 (`ecosystem.config.cjs`):**
-- 2 instancias en modo cluster
+- 2 instancias en modo cluster (puertos 3001 y 3002)
 - Reinicio automatico ante fallos (max 10 reintentos)
 - Limite de memoria: 500MB por instancia
 - Logs en `./logs/pm2-*.log`
@@ -660,8 +571,8 @@ Invoke-WebRequest -Uri http://localhost:3001/api/health -UseBasicParsing
 # 3. Verificar Nginx
 Invoke-WebRequest -Uri http://localhost/health -UseBasicParsing
 
-# 4. Verificar servicio Nginx
-sc query nginx
+# 4. Verificar tarea programada del monitor
+Get-ScheduledTask -TaskName "NginxMonitor" | Format-List TaskName, State
 
 # 5. Verificar procesos PM2
 pm2 status
@@ -680,13 +591,8 @@ pm2 status
 ### 8.1 Actualizar el Frontend (Nuevo Despliegue)
 
 ```powershell
-# 1. Compilar
 npm run build
-
-# 2. Copiar archivos
 Copy-Item -Recurse -Force .\dist\* D:\nginx\pdus\dist\
-
-# 3. Recargar Nginx (sin downtime)
 cd D:\nginx
 .\nginx.exe -s reload
 ```
@@ -698,37 +604,51 @@ cd D:\nginx
 pm2 restart energy-monitoring-api
 
 # Sin PM2
-# Ctrl+C en la terminal y luego:
 npm run server
 ```
 
 ### 8.3 Ver Logs
 
-```bash
-# Logs del backend (PM2)
+```powershell
+# -- NGINX --
+# Diagnosticar paradas (lo mas importante)
+Get-Content D:\nginx\logs\error.log -Tail 50
+
+# Errores del server block
+Get-Content D:\nginx\logs\energy-monitor-error.log -Tail 30
+
+# Estado del backend visto desde Nginx
+Get-Content D:\nginx\logs\upstream-debug.log -Tail 30
+
+# Log del monitor de auto-reinicio
+Get-Content D:\nginx\logs\nginx-monitor.log -Tail 20
+
+# -- BACKEND --
+# Con PM2
 pm2 logs energy-monitoring-api
 
-# Logs del backend (archivos)
+# Ficheros directos
 type .\logs\combined.log
 type .\logs\error.log
-
-# Logs de Nginx
-type D:\nginx\logs\error.log
-type D:\nginx\logs\energy-monitor-error.log
 ```
 
-### 8.4 Gestionar el Servicio Nginx
+### 8.4 Gestionar Nginx
 
 ```powershell
-# Con NSSM
-nssm stop nginx
-nssm start nginx
-nssm restart nginx
-nssm status nginx
+# Arrancar manualmente
+cd D:\nginx && Start-Process .\nginx.exe -WindowStyle Hidden
 
-# Recargar configuracion sin parar el servicio
-cd D:\nginx
-.\nginx.exe -s reload
+# Parar
+cd D:\nginx && .\nginx.exe -s quit
+
+# Recargar configuracion (sin downtime)
+cd D:\nginx && .\nginx.exe -s reload
+
+# Verificar configuracion
+cd D:\nginx && .\nginx.exe -t
+
+# Verificar tarea de monitorizacion
+Get-ScheduledTask -TaskName "NginxMonitor" | Format-List TaskName, State, LastRunTime
 ```
 
 ---
@@ -737,8 +657,13 @@ cd D:\nginx
 
 ### 9.1 Nginx se apaga solo periodicamente
 
-**Causa**: Nginx no esta registrado como servicio de Windows.
-**Solucion**: Seguir la seccion 6.3 para registrarlo con NSSM o WinSW.
+**Diagnostico con los nuevos logs:**
+
+1. Revisar `D:\nginx\logs\error.log` -- las ultimas lineas antes de la parada indicaran la causa (`worker process exited`, `signal received`, `CreateDirectory failed`, etc.)
+2. Revisar `D:\nginx\logs\upstream-debug.log` -- buscar rafagas de `status=502` con `upstream_response_time=-` que indicarian que el backend murio antes que Nginx
+3. Revisar `D:\nginx\logs\nginx-monitor.log` -- confirmara si el monitor detecto la parada y cuando reinicio
+
+**Solucion**: La tarea programada `NginxMonitor` reinicia Nginx automaticamente cada vez que detecta que el proceso no esta activo (comprobacion cada minuto).
 
 ### 9.2 Nginx no arranca: "CreateDirectory failed"
 
@@ -746,7 +671,7 @@ cd D:\nginx
 nginx: [emerg] CreateDirectory() "D:\nginx/temp/client_body_temp" failed
 ```
 
-**Solucion**: Crear los directorios temporales manualmente (ver seccion 6.5).
+**Solucion**: Ejecutar el comando de creacion de directorios de la seccion 6.5. El script `monitor-nginx.ps1` tambien crea estos directorios automaticamente antes de cada reinicio.
 
 ### 9.3 Puerto 80 ocupado
 
@@ -754,37 +679,46 @@ nginx: [emerg] CreateDirectory() "D:\nginx/temp/client_body_temp" failed
 nginx: [emerg] bind() to 0.0.0.0:80 failed (10013)
 ```
 
-**Solucion**: Identificar y detener el proceso que usa el puerto 80:
+**Solucion**:
 ```powershell
 netstat -anob | findstr :80
-# Luego cambiar el puerto en nginx.conf a 8080 si es necesario
 ```
+Identificar el proceso y detenerlo, o cambiar el puerto en `nginx.conf`.
 
 ### 9.4 Error de conexion a SQL Server
 
-- Verificar que el servicio MSSQLSERVER esta activo: `sc query MSSQLSERVER`
-- Verificar que el puerto 1433 esta abierto: `netstat -an | findstr 1433`
+- Verificar que el servicio esta activo: `sc query MSSQLSERVER`
+- Verificar que el puerto esta abierto: `netstat -an | findstr 1433`
 - Verificar credenciales en `.env`
 - Verificar que SQL Server Authentication esta habilitado
 
 ### 9.5 Backend no responde en /api/
 
-- Verificar que el proceso Node.js esta activo: `pm2 status` o `tasklist | findstr node`
-- Verificar el puerto: `netstat -an | findstr 3001`
+- Verificar proceso: `pm2 status` o `tasklist | findstr node`
+- Verificar puerto: `netstat -an | findstr 3001`
 - Revisar logs: `pm2 logs` o `type .\logs\error.log`
+- Revisar `D:\nginx\logs\upstream-debug.log` para ver los errores desde la perspectiva de Nginx
 
 ### 9.6 Frontend no carga datos
 
 - Verificar que el backend esta corriendo en el puerto configurado
-- Verificar la variable `FRONTEND_URL` en `.env` para CORS
-- Verificar las credenciales de la API NENG en `.env`
-- Abrir DevTools del navegador y revisar la consola y la pestana Network
+- Verificar `FRONTEND_URL` en `.env`
+- Verificar credenciales de la API NENG en `.env`
+- Abrir DevTools > Network en el navegador
 
 ### 9.7 Error de sesion/autenticacion
 
-- Verificar que `SESSION_SECRET` esta configurado en `.env`
+- Verificar `SESSION_SECRET` en `.env`
 - Verificar que la tabla `usersAlertado` existe en la BD
-- Limpiar cookies del navegador e intentar de nuevo
+- Limpiar cookies del navegador
+
+### 9.8 upstream-debug.log muestra muchos 502
+
+Si el log de upstream muestra `upstream_status=502` repetidamente con `upstream_response_time=-`:
+
+1. El backend Node.js probablemente se reinicio (PM2 `max_memory_restart`) o murio por una excepcion no capturada
+2. Revisar `./logs/pm2-error.log` para ver la causa
+3. Con la configuracion actual, Nginx marcara el backend como caido tras 3 fallos consecutivos durante 30 segundos, y saltara al backup (3002) automaticamente
 
 ---
 
@@ -793,10 +727,7 @@ netstat -anob | findstr :80
 ### 10.1 Configuracion
 
 ```bash
-# Instalar dependencias
 npm install
-
-# Configurar .env (ver seccion 5)
 copy .env.example .env
 ```
 
