@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Routes, Route } from 'react-router-dom';
-import { Activity, AlertTriangle, Settings, BarChart3, Zap, Download, RefreshCw, Wrench, LogOut, User, ChevronDown, ChevronUp, Bell, BellOff } from 'lucide-react';
+import { Activity, TriangleAlert as AlertTriangle, Settings, ChartBar as BarChart3, Zap, Download, RefreshCw, Wrench, LogOut, User, ChevronDown, ChevronUp, Bell, BellOff } from 'lucide-react';
 import CountryGroup from './components/CountryGroup';
 import ThresholdManager from './components/ThresholdManager';
 import RackThresholdManager from './components/RackThresholdManager';
@@ -9,6 +9,7 @@ import { useRackData } from './hooks/useRackData';
 import { useThresholds } from './hooks/useThresholds';
 import { getThresholdValue } from './utils/thresholdUtils';
 import { getMetricStatusColor, getAmperageStatusColor } from './utils/uiUtils';
+import LocationAlertManager from './components/LocationAlertManager';
 import { useAuth } from './contexts/AuthContext';
 
 function App() {
@@ -106,6 +107,10 @@ function App() {
     error: thresholdsError,
     refreshThresholds
   } = useThresholds();
+
+  const allSites = React.useMemo(() => {
+    return Array.from(new Set(racks.map(r => r.site).filter(Boolean) as string[])).sort();
+  }, [racks]);
 
   // Initialize site filter based on user's assigned sites
   React.useEffect(() => {
@@ -1344,6 +1349,15 @@ function App() {
                   </div>
                 )}
               </div>
+            )}
+
+            {!showThresholds && activeView === 'alertas' && (user?.rol === 'Administrador' || user?.rol === 'Operador') && (
+              <LocationAlertManager
+                availableSites={allSites}
+                onConfigChanged={() => {
+                  refreshData();
+                }}
+              />
             )}
 
             {/* Alerts Summary Dashboard - Dual View */}

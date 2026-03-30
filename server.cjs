@@ -252,9 +252,10 @@ async function executeQuery(queryFn, retries = 2) {
 async function initializeDatabaseConnection() {
   try {
     await getPool();
+    await ensureLocationAlertConfigTable();
+    await loadLocationAlertConfig();
     logger.debug('Database initialization complete');
   } catch (error) {
-    // Database initialization failed logged by winston
     logger.error('Database initialization failed', { error: error.message });
   }
 }
@@ -270,6 +271,59 @@ const SONAR_CONFIG = {
 };
 
 let alertSendingEnabled = false;
+
+const locationAlertConfig = new Map();
+
+function normalizeLocationName(site) {
+  if (!site) return site;
+  if (site.toLowerCase().includes('cantabria')) return 'Cantabria';
+  return site;
+}
+
+function isLocationAlertEnabled(site) {
+  const normalized = normalizeLocationName(site);
+  if (!normalized) return true;
+  if (!locationAlertConfig.has(normalized)) return true;
+  return locationAlertConfig.get(normalized);
+}
+
+async function ensureLocationAlertConfigTable() {
+  try {
+    await executeQuery(async (pool) => {
+      await pool.request().query(`
+        IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='location_alert_config' AND xtype='U')
+        BEGIN
+          CREATE TABLE location_alert_config (
+            location_name NVARCHAR(255) PRIMARY KEY,
+            alerts_enabled BIT NOT NULL DEFAULT 1,
+            updated_at DATETIME DEFAULT GETDATE(),
+            updated_by NVARCHAR(100) DEFAULT 'Sistema'
+          );
+        END
+      `);
+    });
+    logger.debug('location_alert_config table ensured');
+  } catch (error) {
+    logger.error('Error ensuring location_alert_config table', { error: error.message });
+  }
+}
+
+async function loadLocationAlertConfig() {
+  try {
+    const result = await executeQuery(async (pool) => {
+      return await pool.request().query(
+        'SELECT location_name, alerts_enabled FROM location_alert_config'
+      );
+    });
+    locationAlertConfig.clear();
+    result.recordset.forEach(row => {
+      locationAlertConfig.set(row.location_name, !!row.alerts_enabled);
+    });
+    logger.debug('Location alert config loaded', { locations: locationAlertConfig.size });
+  } catch (error) {
+    logger.error('Error loading location alert config', { error: error.message });
+  }
+}
 
 const https = require('https');
 const http = require('http');
@@ -1121,6 +1175,14 @@ async function processRackData(racks, thresholds) {
 
     // If in maintenance, set status to 'normal' and skip all alert evaluation
     if (isInMaintenance) {
+      return {
+        ...rack,
+        status: 'normal',
+        reasons: []
+      };
+    }
+
+    if (!isLocationAlertEnabled(rack.site)) {
       return {
         ...rack,
         status: 'normal',
@@ -5007,6 +5069,71 @@ app.post('/api/alert-sending', requireAuth, requireRole('Administrador', 'Operad
     }).catch(err => {
       logger.error('[ALERT-SENDING] Error sending existing alerts after activation', { error: err.message });
     });
+  }
+});
+
+app.get('/api/location-alerts', requireAuth, async (req, res) => {
+  try {
+    const result = await executeQuery(async (pool) => {
+      return await pool.request().query(
+        'SELECT location_name, alerts_enabled, updated_at, updated_by FROM location_alert_config ORDER BY location_name'
+      );
+    });
+    res.json({
+      success: true,
+      locations: result.recordset.map(r => ({
+        location_name: r.location_name,
+        alerts_enabled: !!r.alerts_enabled,
+        updated_at: r.updated_at,
+        updated_by: r.updated_by
+      })),
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    logger.error('Error fetching location alert config', { error: error.message });
+    res.status(500).json({ success: false, message: 'Error fetching location alert configuration' });
+  }
+});
+
+app.post('/api/location-alerts', requireAuth, requireRole('Administrador', 'Operador'), async (req, res) => {
+  try {
+    const { locations } = req.body;
+    if (!Array.isArray(locations)) {
+      return res.status(400).json({ success: false, message: 'locations must be an array' });
+    }
+    const updatedBy = req.session.usuario || 'unknown';
+    for (const loc of locations) {
+      if (!loc.location_name || typeof loc.alerts_enabled !== 'boolean') continue;
+      await executeQuery(async (pool) => {
+        await pool.request()
+          .input('location_name', sql.NVarChar, loc.location_name)
+          .input('alerts_enabled', sql.Bit, loc.alerts_enabled ? 1 : 0)
+          .input('updated_by', sql.NVarChar, updatedBy)
+          .query(`
+            MERGE location_alert_config AS target
+            USING (SELECT @location_name AS location_name) AS source
+            ON target.location_name = source.location_name
+            WHEN MATCHED THEN
+              UPDATE SET alerts_enabled = @alerts_enabled, updated_at = GETDATE(), updated_by = @updated_by
+            WHEN NOT MATCHED THEN
+              INSERT (location_name, alerts_enabled, updated_at, updated_by)
+              VALUES (@location_name, @alerts_enabled, GETDATE(), @updated_by);
+          `);
+      });
+    }
+    await loadLocationAlertConfig();
+    logger.info('[LOCATION-ALERTS] Config updated', {
+      locations: locations.map(l => ({ name: l.location_name, enabled: l.alerts_enabled })),
+      changedBy: updatedBy
+    });
+    res.json({
+      success: true,
+      message: 'Location alert configuration updated',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    logger.error('Error updating location alert config', { error: error.message });
+    res.status(500).json({ success: false, message: 'Error updating location alert configuration' });
   }
 });
 
