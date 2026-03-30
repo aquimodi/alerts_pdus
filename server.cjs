@@ -1190,6 +1190,17 @@ async function processRackData(racks, thresholds) {
       };
     }
 
+    const chainVal = (rack.chain || '').toLowerCase();
+    const nodeVal = (rack.node || '').toLowerCase();
+    const serialVal = (rack.serial || '').toLowerCase();
+    if (chainVal === 'unknown' || nodeVal === 'unknown' || serialVal === 'unknown') {
+      return {
+        ...rack,
+        status: 'normal',
+        reasons: []
+      };
+    }
+
     // Create effective thresholds by merging global with rack-specific
     const effectiveThresholds = thresholds.map(t => {
       if (rackOverrides[t.key] !== undefined) {
