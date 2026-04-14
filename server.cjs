@@ -5541,6 +5541,113 @@ app.post('/api/export/alerts', requireAuth, async (req, res) => {
   }
 });
 
+app.post('/api/export/maintenance', requireAuth, async (req, res) => {
+  try {
+    const { countryFilter, siteFilter, dcFilter } = req.body;
+
+    const entriesResult = await executeQuery(async (pool) => {
+      return await pool.request().query(`
+        SELECT
+          me.id, me.entry_type, me.rack_id, me.chain, me.site, me.dc,
+          me.reason, me.[user], me.started_at, me.started_by, me.created_at,
+          mrd.rack_id AS detail_rack_id, mrd.name AS detail_name,
+          mrd.country AS detail_country, mrd.site AS detail_site,
+          mrd.dc AS detail_dc, mrd.phase AS detail_phase,
+          mrd.chain AS detail_chain, mrd.node AS detail_node,
+          mrd.gwName AS detail_gwName, mrd.gwIp AS detail_gwIp
+        FROM maintenance_entries me
+        LEFT JOIN maintenance_rack_details mrd ON me.id = mrd.entry_id
+        ORDER BY me.created_at DESC, mrd.name
+      `);
+    });
+
+    const rows = entriesResult.recordset || [];
+
+    let filteredRows = rows;
+    if (countryFilter && countryFilter !== 'all') {
+      filteredRows = filteredRows.filter(r => r.detail_country === countryFilter);
+    }
+    if (siteFilter && siteFilter !== 'all') {
+      filteredRows = filteredRows.filter(r => r.detail_site === siteFilter);
+    }
+    if (dcFilter && dcFilter !== 'all') {
+      filteredRows = filteredRows.filter(r => r.detail_dc === dcFilter);
+    }
+
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Mantenimiento');
+
+    sheet.columns = [
+      { header: 'Tipo', key: 'tipo', width: 18 },
+      { header: 'Nombre del Rack', key: 'nombre', width: 25 },
+      { header: 'ID Rack', key: 'rackId', width: 20 },
+      { header: 'Pais', key: 'pais', width: 15 },
+      { header: 'Sitio', key: 'sitio', width: 20 },
+      { header: 'Sala', key: 'sala', width: 15 },
+      { header: 'Chain', key: 'chain', width: 15 },
+      { header: 'Node', key: 'node', width: 15 },
+      { header: 'Fase', key: 'fase', width: 10 },
+      { header: 'Gateway', key: 'gateway', width: 20 },
+      { header: 'IP Gateway', key: 'gwIp', width: 18 },
+      { header: 'Usuario', key: 'usuario', width: 20 },
+      { header: 'Razon', key: 'razon', width: 35 },
+      { header: 'Fecha Inicio', key: 'fechaInicio', width: 22 },
+      { header: 'Iniciado Por', key: 'iniciadoPor', width: 20 }
+    ];
+
+    const headerRow = sheet.getRow(1);
+    headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E3A5F' } };
+    headerRow.alignment = { horizontal: 'center' };
+
+    filteredRows.forEach(row => {
+      const isChain = row.entry_type === 'chain';
+      const dataRow = sheet.addRow({
+        tipo: isChain ? 'Chain Completa' : 'Rack Individual',
+        nombre: row.detail_name || '',
+        rackId: row.detail_rack_id || '',
+        pais: row.detail_country || '',
+        sitio: row.detail_site || row.site || '',
+        sala: row.detail_dc || row.dc || '',
+        chain: row.detail_chain || row.chain || '',
+        node: row.detail_node || '',
+        fase: row.detail_phase || '',
+        gateway: row.detail_gwName || '',
+        gwIp: row.detail_gwIp || '',
+        usuario: row.user || '',
+        razon: row.reason || '',
+        fechaInicio: row.started_at ? new Date(row.started_at).toLocaleString('es-ES') : '',
+        iniciadoPor: row.started_by || ''
+      });
+
+      const fillColor = isChain ? 'FFFFF3CD' : 'FFDBEAFE';
+      dataRow.eachCell(cell => {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fillColor } };
+        cell.border = {
+          top: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+          bottom: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+          left: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+          right: { style: 'thin', color: { argb: 'FFD1D5DB' } }
+        };
+      });
+    });
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename=mantenimiento_${new Date().toISOString().slice(0,10)}.xlsx`);
+
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (error) {
+    logger.error('Maintenance export failed', { error: error.message });
+    res.status(500).json({
+      success: false,
+      message: 'Failed to export maintenance to Excel',
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 // Error handling middleware
 app.use((err, req, res, next) => {
   // Unhandled error

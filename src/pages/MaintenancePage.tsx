@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { Wrench, Calendar, User, MapPin, Server, AlertCircle, X, Trash2, ChevronDown, ChevronUp, Upload, XCircle, Download } from 'lucide-react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
+import { Wrench, Calendar, User, MapPin, Server, CircleAlert as AlertCircle, X, Trash2, ChevronDown, ChevronUp, Upload, Circle as XCircle, Download, RefreshCw, ListFilter as Filter, FileSpreadsheet } from 'lucide-react';
 import ImportMaintenanceModal from '../components/ImportMaintenanceModal';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -42,6 +42,12 @@ export default function MaintenancePage() {
   const [expandedEntries, setExpandedEntries] = useState<Set<string>>(new Set());
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [downloadingTemplate, setDownloadingTemplate] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
+  const [countryFilter, setCountryFilter] = useState<string>('all');
+  const [siteFilter, setSiteFilter] = useState<string>('all');
+  const [dcFilter, setDcFilter] = useState<string>('all');
+  const [isFiltersExpanded, setIsFiltersExpanded] = useState(false);
 
   const handleDownloadTemplate = async () => {
     try {
@@ -147,9 +153,6 @@ export default function MaintenancePage() {
 
   useEffect(() => {
     fetchMaintenanceEntries();
-
-    const interval = setInterval(fetchMaintenanceEntries, 60000);
-    return () => clearInterval(interval);
   }, []);
 
   const handleRemoveEntry = async (entryId: string, entryType: string, identifier: string, entrySite?: string) => {
@@ -295,6 +298,80 @@ export default function MaintenancePage() {
     }
   };
 
+  const handleManualRefresh = async () => {
+    setIsRefreshing(true);
+    await fetchMaintenanceEntries();
+    setIsRefreshing(false);
+  };
+
+  const handleExportMaintenance = async () => {
+    try {
+      setIsExporting(true);
+      const response = await fetch('/api/export/maintenance', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          countryFilter,
+          siteFilter,
+          dcFilter
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `mantenimiento_${new Date().toISOString().slice(0, 10)}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    } catch (err) {
+      console.error('Error exporting maintenance:', err);
+      alert(`Error al exportar: ${err instanceof Error ? err.message : 'Error desconocido'}`);
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const availableCountries = useMemo(() => {
+    const countries = new Set<string>();
+    maintenanceEntries.forEach(entry => {
+      entry.racks.forEach(rack => {
+        if (rack.country) countries.add(rack.country);
+      });
+    });
+    return Array.from(countries).sort();
+  }, [maintenanceEntries]);
+
+  const availableSites = useMemo(() => {
+    const sites = new Set<string>();
+    maintenanceEntries.forEach(entry => {
+      entry.racks.forEach(rack => {
+        if (countryFilter !== 'all' && rack.country !== countryFilter) return;
+        if (rack.site) sites.add(rack.site);
+      });
+    });
+    return Array.from(sites).sort();
+  }, [maintenanceEntries, countryFilter]);
+
+  const availableDcs = useMemo(() => {
+    const dcs = new Set<string>();
+    maintenanceEntries.forEach(entry => {
+      entry.racks.forEach(rack => {
+        if (countryFilter !== 'all' && rack.country !== countryFilter) return;
+        if (siteFilter !== 'all' && rack.site !== siteFilter) return;
+        if (rack.dc) dcs.add(rack.dc);
+      });
+    });
+    return Array.from(dcs).sort();
+  }, [maintenanceEntries, countryFilter, siteFilter]);
+
   if (loading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 p-8">
@@ -325,8 +402,19 @@ export default function MaintenancePage() {
     );
   }
 
-  // No filtering - show all maintenance entries
-  const filteredMaintenanceEntries = maintenanceEntries;
+  const filteredMaintenanceEntries = useMemo(() => {
+    if (countryFilter === 'all' && siteFilter === 'all' && dcFilter === 'all') {
+      return maintenanceEntries;
+    }
+    return maintenanceEntries.filter(entry => {
+      return entry.racks.some(rack => {
+        if (countryFilter !== 'all' && rack.country !== countryFilter) return false;
+        if (siteFilter !== 'all' && rack.site !== siteFilter) return false;
+        if (dcFilter !== 'all' && rack.dc !== dcFilter) return false;
+        return true;
+      });
+    });
+  }, [maintenanceEntries, countryFilter, siteFilter, dcFilter]);
 
   // Count UNIQUE physical racks across all maintenance entries
   // Multiple entries can have the same rack_id, so we use a Set to ensure uniqueness
@@ -366,6 +454,33 @@ export default function MaintenancePage() {
               <h1 className="text-3xl font-bold text-slate-900">Modo Mantenimiento</h1>
             </div>
             <div className="flex items-center gap-3">
+              <button
+                onClick={handleManualRefresh}
+                disabled={isRefreshing}
+                className="bg-slate-600 hover:bg-slate-700 text-white font-medium px-4 py-2 rounded-lg transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                title="Refrescar datos"
+              >
+                <RefreshCw className={`w-5 h-5 ${isRefreshing ? 'animate-spin' : ''}`} />
+                Refrescar
+              </button>
+              <button
+                onClick={handleExportMaintenance}
+                disabled={isExporting || filteredMaintenanceEntries.length === 0}
+                className="bg-teal-600 hover:bg-teal-700 text-white font-medium px-4 py-2 rounded-lg transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                title="Exportar mantenimiento a Excel"
+              >
+                {isExporting ? (
+                  <>
+                    <div className="animate-spin rounded-full h-5 w-5 border-2 border-white border-t-transparent"></div>
+                    Exportando...
+                  </>
+                ) : (
+                  <>
+                    <FileSpreadsheet className="w-5 h-5" />
+                    Exportar
+                  </>
+                )}
+              </button>
               {maintenanceEntries.length > 0 && user?.rol !== 'Observador' && (
                 <button
                   onClick={handleRemoveAll}
@@ -435,6 +550,80 @@ export default function MaintenancePage() {
               </div>
             </div>
           )}
+
+          <div className="mt-4">
+            <button
+              onClick={() => setIsFiltersExpanded(!isFiltersExpanded)}
+              className="flex items-center gap-2 text-sm font-medium text-slate-700 hover:text-slate-900 transition-colors"
+            >
+              <Filter className="w-4 h-4" />
+              Filtros de ubicacion
+              {(countryFilter !== 'all' || siteFilter !== 'all' || dcFilter !== 'all') && (
+                <span className="bg-blue-100 text-blue-700 text-xs px-2 py-0.5 rounded-full">Activos</span>
+              )}
+              {isFiltersExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+            </button>
+            {isFiltersExpanded && (
+              <div className="mt-3 bg-white rounded-lg border border-slate-200 p-4">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600 mb-1">Pais</label>
+                    <select
+                      value={countryFilter}
+                      onChange={(e) => {
+                        setCountryFilter(e.target.value);
+                        setSiteFilter('all');
+                        setDcFilter('all');
+                      }}
+                      className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      <option value="all">Todos</option>
+                      {availableCountries.map(c => (
+                        <option key={c} value={c}>{c}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600 mb-1">Sitio</label>
+                    <select
+                      value={siteFilter}
+                      onChange={(e) => {
+                        setSiteFilter(e.target.value);
+                        setDcFilter('all');
+                      }}
+                      className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      <option value="all">Todos</option>
+                      {availableSites.map(s => (
+                        <option key={s} value={s}>{s}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600 mb-1">Sala</label>
+                    <select
+                      value={dcFilter}
+                      onChange={(e) => setDcFilter(e.target.value)}
+                      className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      <option value="all">Todas</option>
+                      {availableDcs.map(d => (
+                        <option key={d} value={d}>{d}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                {(countryFilter !== 'all' || siteFilter !== 'all' || dcFilter !== 'all') && (
+                  <button
+                    onClick={() => { setCountryFilter('all'); setSiteFilter('all'); setDcFilter('all'); }}
+                    className="mt-3 text-xs text-blue-600 hover:text-blue-800 font-medium"
+                  >
+                    Limpiar filtros
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
 
           {maintenanceEntries.length > 0 && (
             <div className="mt-4 flex gap-6 text-sm">
