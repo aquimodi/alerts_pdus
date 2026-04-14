@@ -1,13 +1,10 @@
 import { RackData } from '../types';
 
-/**
- * Groups racks by country, site, DC, Gateway, and logical rack ID
- */
-export function groupRacksByCountry(racks: RackData[]): { [country: string]: { [site: string]: { [dc: string]: { [gwKey: string]: RackData[][] } } } } {
-  const countryGroups: { [country: string]: { [site: string]: { [dc: string]: { [gwKey: string]: RackData[][] } } } } = {};
+export function groupRacksByCountry(racks: RackData[]): { [country: string]: { [site: string]: { [dc: string]: { [rackId: string]: { [gwKey: string]: RackData[] } } } } } {
+  const countryGroups: { [country: string]: { [site: string]: { [dc: string]: { [rackId: string]: { [gwKey: string]: RackData[] } } } } } = {};
 
   if (!Array.isArray(racks)) {
-    console.error('❌ groupRacksByCountry: racks no es un array', racks);
+    console.error('groupRacksByCountry: racks no es un array', racks);
     return {};
   }
 
@@ -30,34 +27,17 @@ export function groupRacksByCountry(racks: RackData[]): { [country: string]: { [
       if (!countryGroups[country][site]) {
         countryGroups[country][site] = {};
       }
-
-      Object.entries(dcGroups).forEach(([dc, gwGroups]) => {
-        if (!countryGroups[country][site][dc]) {
-          countryGroups[country][site][dc] = {};
-        }
-
-        countryGroups[country][site][dc] = gwGroups;
+      Object.entries(dcGroups).forEach(([dc, rackGroups]) => {
+        countryGroups[country][site][dc] = rackGroups;
       });
     });
-  });
-
-  console.log('✅ Estructura de agrupamiento creada:', {
-    países: Object.keys(countryGroups).length,
-    ejemplo: Object.keys(countryGroups)[0] ? {
-      país: Object.keys(countryGroups)[0],
-      sitios: Object.keys(countryGroups[Object.keys(countryGroups)[0]]).length,
-      estructura: 'País → Sitio → DC → Gateway → Racks'
-    } : 'Sin datos'
   });
 
   return countryGroups;
 }
 
-/**
- * Groups racks by site, DC, Gateway, and logical rack ID
- */
-export function groupRacksBySite(racks: RackData[]): { [site: string]: { [dc: string]: { [gwKey: string]: RackData[][] } } } {
-  const siteGroups: { [site: string]: { [dc: string]: { [gwKey: string]: RackData[][] } } } = {};
+export function groupRacksBySite(racks: RackData[]): { [site: string]: { [dc: string]: { [rackId: string]: { [gwKey: string]: RackData[] } } } } {
+  const siteGroups: { [site: string]: { [dc: string]: { [rackId: string]: { [gwKey: string]: RackData[] } } } } = {};
 
   const racksBySite: { [site: string]: RackData[] } = {};
   racks.forEach(rack => {
@@ -74,23 +54,16 @@ export function groupRacksBySite(racks: RackData[]): { [site: string]: { [dc: st
     }
 
     const dcGroups = groupRacksByDc(siteRacks);
-    Object.entries(dcGroups).forEach(([dc, gwGroups]) => {
-      if (!siteGroups[site][dc]) {
-        siteGroups[site][dc] = {};
-      }
-
-      siteGroups[site][dc] = gwGroups;
+    Object.entries(dcGroups).forEach(([dc, rackGroups]) => {
+      siteGroups[site][dc] = rackGroups;
     });
   });
 
   return siteGroups;
 }
 
-/**
- * Groups racks by DC and Gateway
- */
-export function groupRacksByDc(racks: RackData[]): { [dc: string]: { [gwKey: string]: RackData[][] } } {
-  const dcGroups: { [dc: string]: { [gwKey: string]: RackData[][] } } = {};
+export function groupRacksByDc(racks: RackData[]): { [dc: string]: { [rackId: string]: { [gwKey: string]: RackData[] } } } {
+  const dcGroups: { [dc: string]: { [rackId: string]: { [gwKey: string]: RackData[] } } } = {};
 
   const racksByDc: { [dc: string]: RackData[] } = {};
   racks.forEach(rack => {
@@ -102,88 +75,38 @@ export function groupRacksByDc(racks: RackData[]): { [dc: string]: { [gwKey: str
   });
 
   Object.entries(racksByDc).forEach(([dc, dcRacks]) => {
-    if (!dcGroups[dc]) {
-      dcGroups[dc] = {};
-    }
-
-    const gwGroups = groupRacksByGateway(dcRacks);
-    Object.entries(gwGroups).forEach(([gwKey, logicalRackGroups]) => {
-      if (!dcGroups[dc][gwKey]) {
-        dcGroups[dc][gwKey] = [];
-      }
-
-      dcGroups[dc][gwKey] = logicalRackGroups;
-    });
+    dcGroups[dc] = groupByRackThenGateway(dcRacks);
   });
 
   return dcGroups;
 }
 
-/**
- * Groups racks by Gateway and rack ID
- */
-export function groupRacksByGateway(racks: RackData[]): { [gwKey: string]: RackData[][] } {
-  const gwGroups: { [gwKey: string]: RackData[][] } = {};
+export function groupByRackThenGateway(racks: RackData[]): { [rackId: string]: { [gwKey: string]: RackData[] } } {
+  const result: { [rackId: string]: { [gwKey: string]: RackData[] } } = {};
 
   if (!Array.isArray(racks)) {
-    console.error('❌ groupRacksByGateway: racks no es un array', racks);
+    console.error('groupByRackThenGateway: racks no es un array', racks);
     return {};
   }
 
-  const racksByGw: { [gwKey: string]: RackData[] } = {};
   racks.forEach(rack => {
+    const rackId = rack.rackId || rack.id;
     const gwName = rack.gwName || 'N/A';
     const gwIp = rack.gwIp || 'N/A';
     const gwKey = `${gwName}-${gwIp}`;
 
-    if (!racksByGw[gwKey]) {
-      racksByGw[gwKey] = [];
+    if (!result[rackId]) {
+      result[rackId] = {};
     }
-    racksByGw[gwKey].push(rack);
+    if (!result[rackId][gwKey]) {
+      result[rackId][gwKey] = [];
+    }
+    result[rackId][gwKey].push(rack);
   });
 
-  Object.entries(racksByGw).forEach(([gwKey, gwRacks]) => {
-    const rackMap = new Map<string, RackData[]>();
-
-    gwRacks.forEach(rack => {
-      const rackId = rack.rackId || rack.id;
-
-      if (!rackMap.has(rackId)) {
-        rackMap.set(rackId, []);
-      }
-
-      rackMap.get(rackId)!.push(rack);
-    });
-
-    gwGroups[gwKey] = Array.from(rackMap.values()).sort((a, b) => {
-      const chainA = a[0]?.chain || '';
-      const chainB = b[0]?.chain || '';
-
-      const chainComparison = chainA.localeCompare(chainB, undefined, { numeric: true });
-      if (chainComparison !== 0) {
-        return chainComparison;
-      }
-
-      const nameA = (a[0]?.name || '').toLowerCase();
-      const nameB = (b[0]?.name || '').toLowerCase();
-      return nameA.localeCompare(nameB);
-    });
-  });
-
-  console.log('🌐 Gateways agrupados:', {
-    totalGateways: Object.keys(gwGroups).length,
-    gateways: Object.keys(gwGroups).map(key => {
-      const [name, ip] = key.split('-');
-      return { name, ip, racks: gwGroups[key].length };
-    })
-  });
-
-  return gwGroups;
+  return result;
 }
 
-/**
- * Filters racks based on multiple criteria
- */
 export function filterRacks(
   racks: RackData[],
   statusFilter: 'all' | 'critical' | 'warning' | 'normal' | 'maintenance',
@@ -198,12 +121,10 @@ export function filterRacks(
   maintenanceRacks: Set<string> = new Set()
 ): RackData[] {
   let filteredRacks = racks;
-  
-  // Filter by search query
+
   if (searchQuery.trim() !== '') {
     const lowercaseQuery = searchQuery.toLowerCase().trim();
     filteredRacks = filteredRacks.filter(rack => {
-      // If searching all fields, use the previous behavior
       if (searchField === 'all') {
         const searchableFields = [
           rack.site,
@@ -214,13 +135,12 @@ export function filterRacks(
           rack.name,
           rack.serial
         ];
-        
-        return searchableFields.some(field => 
+
+        return searchableFields.some(field =>
           field && String(field).toLowerCase().includes(lowercaseQuery)
         );
       }
-      
-      // Search by specific field
+
       let fieldValue = '';
       switch (searchField) {
         case 'site':
@@ -247,27 +167,23 @@ export function filterRacks(
         default:
           return true;
       }
-      
+
       return fieldValue.toLowerCase().includes(lowercaseQuery);
     });
   }
-  
-  // Filter by country
+
   if (countryFilter !== 'all') {
     filteredRacks = filteredRacks.filter(rack => rack.country === countryFilter);
   }
 
-  // Filter by site
   if (siteFilter !== 'all') {
     filteredRacks = filteredRacks.filter(rack => rack.site === siteFilter);
   }
 
-  // Filter by DC
   if (dcFilter !== 'all') {
     filteredRacks = filteredRacks.filter(rack => rack.dc === dcFilter);
   }
 
-  // Filter by Gateway
   if (gwFilter !== 'all') {
     filteredRacks = filteredRacks.filter(rack => {
       const gwName = rack.gwName || 'N/A';
@@ -311,16 +227,13 @@ export function filterRacks(
       });
     }
   }
-  
-  // Filter by specific metric type (only in Alertas mode and when statusFilter is not 'all')
-  // No need to check maintenance here since they're already excluded in Alertas mode
+
   if (metricFilter !== 'all' && statusFilter !== 'all' && !showAllRacks) {
     filteredRacks = filteredRacks.filter(rack => {
       if (!rack.reasons || rack.reasons.length === 0) {
         return false;
       }
 
-      // Check if the rack has alerts for the specific metric and status combination
       const hasSpecificMetricAlert = rack.reasons.some(reason => {
         const hasStatusMatch = reason.startsWith(`${statusFilter}_`);
         const hasMetricMatch = reason.includes(metricFilter);
@@ -330,6 +243,6 @@ export function filterRacks(
       return hasSpecificMetricAlert;
     });
   }
-  
+
   return filteredRacks;
 }

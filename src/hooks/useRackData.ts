@@ -15,7 +15,7 @@ interface SonarError {
 
 interface UseRackDataReturn {
   racks: RackData[];
-  groupedRacks: { [country: string]: { [site: string]: { [dc: string]: { [gwKey: string]: RackData[][] } } } };
+  groupedRacks: { [country: string]: { [site: string]: { [dc: string]: { [rackId: string]: { [gwKey: string]: RackData[] } } } } };
   originalRackGroups: RackData[][];
   maintenanceRacks: Set<string>;
   sonarErrors: { [rackId: string]: SonarError };
@@ -24,6 +24,7 @@ interface UseRackDataReturn {
   expandedCountryIds: Set<string>;
   expandedSiteIds: Set<string>;
   expandedDcIds: Set<string>;
+  expandedRackIds: Set<string>;
   expandedGwIds: Set<string>;
   activeStatusFilter: 'all' | 'critical' | 'warning' | 'normal' | 'maintenance';
   activeCountryFilter: string;
@@ -38,6 +39,7 @@ interface UseRackDataReturn {
   toggleCountryExpansion: (country: string) => void;
   toggleSiteExpansion: (site: string) => void;
   toggleDcExpansion: (dc: string) => void;
+  toggleRackIdExpansion: (rackId: string) => void;
   toggleGwExpansion: (gwKey: string) => void;
   setActiveStatusFilter: (filter: 'all' | 'critical' | 'warning' | 'normal' | 'maintenance') => void;
   setActiveCountryFilter: (country: string) => void;
@@ -64,6 +66,7 @@ export function useRackData(options: UseRackDataOptions = {}): UseRackDataReturn
   const [expandedCountryIds, setExpandedCountryIds] = useState<Set<string>>(new Set());
   const [expandedSiteIds, setExpandedSiteIds] = useState<Set<string>>(new Set());
   const [expandedDcIds, setExpandedDcIds] = useState<Set<string>>(new Set());
+  const [expandedRackIds, setExpandedRackIds] = useState<Set<string>>(new Set());
   const [expandedGwIds, setExpandedGwIds] = useState<Set<string>>(new Set());
   const [activeStatusFilter, setActiveStatusFilter] = useState<'all' | 'critical' | 'warning' | 'normal' | 'maintenance'>('all');
   const [activeCountryFilter, setActiveCountryFilter] = useState<string>('all');
@@ -283,6 +286,18 @@ export function useRackData(options: UseRackDataOptions = {}): UseRackDataReturn
     });
   };
 
+  const toggleRackIdExpansion = (rackId: string) => {
+    setExpandedRackIds(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(rackId)) {
+        newSet.delete(rackId);
+      } else {
+        newSet.add(rackId);
+      }
+      return newSet;
+    });
+  };
+
   const toggleGwExpansion = (gwKey: string) => {
     setExpandedGwIds(prev => {
       const newSet = new Set(prev);
@@ -384,6 +399,7 @@ export function useRackData(options: UseRackDataOptions = {}): UseRackDataReturn
     expandedCountryIds,
     expandedSiteIds,
     expandedDcIds,
+    expandedRackIds,
     expandedGwIds,
     activeStatusFilter,
     activeCountryFilter,
@@ -397,6 +413,7 @@ export function useRackData(options: UseRackDataOptions = {}): UseRackDataReturn
     toggleCountryExpansion,
     toggleSiteExpansion,
     toggleDcExpansion,
+    toggleRackIdExpansion,
     toggleGwExpansion,
     setActiveStatusFilter: handleStatusFilterChange,
     setActiveCountryFilter: handleCountryFilterChange,

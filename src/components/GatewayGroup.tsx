@@ -6,12 +6,13 @@ import { RackData } from '../types';
 interface GatewayGroupProps {
   gwName: string;
   gwIp: string;
-  rackGroups: RackData[][];
+  pdus: RackData[];
   originalRackGroups: RackData[][];
   activeView: 'principal' | 'alertas' | 'mantenimiento';
   country: string;
   site: string;
   dc: string;
+  rackId: string;
   isExpanded: boolean;
   onToggleExpand: (gwKey: string) => void;
   getThresholdValue: (key: string) => number | undefined;
@@ -37,12 +38,12 @@ interface GatewayGroupProps {
 export default function GatewayGroup({
   gwName,
   gwIp,
-  rackGroups,
-  originalRackGroups,
+  pdus,
   activeView,
   country,
   site,
   dc,
+  rackId,
   isExpanded,
   onToggleExpand,
   getThresholdValue,
@@ -60,8 +61,13 @@ export default function GatewayGroup({
 }: GatewayGroupProps) {
 
   const gwKey = `${gwName}-${gwIp}`;
+  const totalPdus = pdus.length;
 
-  const totalRacksForGateway = rackGroups.length;
+  const overallStatus = pdus.some(r => r.status === 'critical')
+    ? 'critical'
+    : pdus.some(r => r.status === 'warning')
+    ? 'warning'
+    : 'normal';
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -77,22 +83,22 @@ export default function GatewayGroup({
     switch (status) {
       case 'normal': return 'Normal';
       case 'warning': return 'Advertencia';
-      case 'critical': return 'Crítico';
+      case 'critical': return 'Critico';
       case 'maintenance': return 'Mantenimiento';
       default: return 'Desconocido';
     }
   };
 
   return (
-    <div className="bg-white rounded-lg shadow space-y-4 border-2 border-purple-600 mb-4">
+    <div className="bg-white rounded-lg shadow space-y-4 border-2 border-cyan-600 mb-4">
       <div className="flex items-center justify-between cursor-pointer p-6" onClick={() => onToggleExpand(gwKey)}>
         <div className="flex items-center">
-          <div className="bg-purple-600 rounded-full mr-3 p-2">
+          <div className="bg-cyan-600 rounded-full mr-3 p-2">
             <Network className="text-white h-5 w-5" />
           </div>
           <div>
             <div className="flex items-center mb-1">
-              <span className="font-semibold text-purple-600 uppercase tracking-wider text-xs">
+              <span className="font-semibold text-cyan-600 uppercase tracking-wider text-xs">
                 GATEWAY
               </span>
             </div>
@@ -103,96 +109,30 @@ export default function GatewayGroup({
               <span className="text-gray-600 mr-2 text-sm">
                 IP: {gwIp === 'N/A' ? 'No disponible' : gwIp}
               </span>
-              <span className="text-gray-400 mx-2">•</span>
+              <span className="text-gray-400 mx-2">{'\u2022'}</span>
               <span className="text-gray-600 text-sm">
-                {totalRacksForGateway} rack{totalRacksForGateway !== 1 ? 's' : ''}
+                {totalPdus} PDU{totalPdus !== 1 ? 's' : ''}
               </span>
             </div>
           </div>
         </div>
 
         <div className="flex items-center space-x-3">
-          <div className="flex items-center space-x-2">
-          {['critical', 'warning', 'normal', 'maintenance'].map(status => {
-            let count = 0;
-
-            if (status === 'maintenance') {
-              if (activeView === 'alertas') return null;
-              count = rackGroups.filter(rackGroup => {
-                const rackName = String(rackGroup[0].name || '').trim();
-                const rackId = String(rackGroup[0].rackId || rackGroup[0].id || '').trim();
-                return (rackName && maintenanceRacks.has(rackName)) || (rackId && maintenanceRacks.has(rackId));
-              }).length;
-            } else {
-              count = rackGroups.filter(rackGroup => {
-                const rackName = String(rackGroup[0].name || '').trim();
-                const rackId = String(rackGroup[0].rackId || rackGroup[0].id || '').trim();
-                if ((rackName && maintenanceRacks.has(rackName)) || (rackId && maintenanceRacks.has(rackId))) return false;
-                return rackGroup.some(rack => rack.status === status);
-              }).length;
-            }
-
-            if (count === 0 || (activeView === 'alertas' && status === 'normal')) return null;
-
-            const isActive = activeStatusFilter === status;
-
-            let bgActiveClass = 'bg-gray-100';
-            let borderActiveClass = 'border-gray-500';
-            let textActiveClass = 'text-gray-800';
-            let textSecondaryActiveClass = 'text-gray-600';
-
-            if (status === 'critical') {
-              bgActiveClass = 'bg-red-100';
-              borderActiveClass = 'border-red-500';
-              textActiveClass = 'text-red-800';
-              textSecondaryActiveClass = 'text-red-600';
-            } else if (status === 'warning') {
-              bgActiveClass = 'bg-yellow-100';
-              borderActiveClass = 'border-yellow-500';
-              textActiveClass = 'text-yellow-800';
-              textSecondaryActiveClass = 'text-yellow-600';
-            } else if (status === 'normal') {
-              bgActiveClass = 'bg-green-100';
-              borderActiveClass = 'border-green-500';
-              textActiveClass = 'text-green-800';
-              textSecondaryActiveClass = 'text-green-600';
-            } else if (status === 'maintenance') {
-              bgActiveClass = 'bg-blue-100';
-              borderActiveClass = 'border-blue-500';
-              textActiveClass = 'text-blue-800';
-              textSecondaryActiveClass = 'text-blue-600';
-            }
-
-            return (
-              <button
-                key={status}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onStatusFilterChange(status as 'critical' | 'warning' | 'normal' | 'maintenance');
-                }}
-                className={`flex items-center space-x-1 rounded-full border px-2 py-1 transition-all duration-200 hover:shadow-md ${
-                  isActive
-                    ? `${bgActiveClass} ${borderActiveClass} shadow-md`
-                    : 'bg-gray-50 hover:bg-white'
-                }`}
-                title={`Filtrar por ${getStatusText(status).toLowerCase()}`}
-              >
-                <div className={`w-2 h-2 rounded-full ${getStatusColor(status)} ${
-                  status === 'critical' || status === 'warning' ? 'animate-pulse' : ''
-                }`}></div>
-                <span className={`font-medium text-xs ${
-                  isActive ? textActiveClass : 'text-gray-600'
-                }`}>
-                  {count}
-                </span>
-                <span className={`text-xs ${
-                  isActive ? textSecondaryActiveClass : 'text-gray-500'
-                }`}>
-                  {getStatusText(status).toLowerCase()}
-                </span>
-              </button>
-            );
-          })}
+          <div className={`flex items-center space-x-1 rounded-full border px-2 py-1 ${
+            overallStatus === 'critical' ? 'bg-red-100 border-red-500' :
+            overallStatus === 'warning' ? 'bg-yellow-100 border-yellow-500' :
+            'bg-green-100 border-green-500'
+          }`}>
+            <div className={`w-2 h-2 rounded-full ${getStatusColor(overallStatus)} ${
+              overallStatus !== 'normal' ? 'animate-pulse' : ''
+            }`}></div>
+            <span className={`font-medium text-xs ${
+              overallStatus === 'critical' ? 'text-red-800' :
+              overallStatus === 'warning' ? 'text-yellow-800' :
+              'text-green-800'
+            }`}>
+              {getStatusText(overallStatus)}
+            </span>
           </div>
 
           <div className="p-1 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors">
@@ -206,51 +146,21 @@ export default function GatewayGroup({
       </div>
 
       {isExpanded && (
-        <div className="grid gap-4 grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 px-3 pb-6">
-          {rackGroups.map((rackGroup, index) => {
-            const overallStatus = rackGroup.some(r => r.status === 'critical')
-              ? 'critical'
-              : rackGroup.some(r => r.status === 'warning')
-              ? 'warning'
-              : 'normal';
-
-            const handleToggleRow = () => {
-              const rowIndex = Math.floor(index / 4);
-              const startIndex = rowIndex * 4;
-              const endIndex = Math.min(startIndex + 4, rackGroups.length);
-
-              const racksInRow = rackGroups.slice(startIndex, endIndex);
-              const allExpanded = racksInRow.every(rg => expandedRackNames.has(rg[0].name));
-
-              racksInRow.forEach(rg => {
-                if (allExpanded) {
-                  onToggleRackExpansion(rg[0].name);
-                } else {
-                  if (!expandedRackNames.has(rg[0].name)) {
-                    onToggleRackExpansion(rg[0].name);
-                  }
-                }
-              });
-            };
-
-            return (
-              <CombinedRackCard
-                key={`combined-${rackGroup[0].rackId || rackGroup[0].id}-${index}`}
-                racks={rackGroup}
-                overallStatus={overallStatus}
-                getThresholdValue={getThresholdValue}
-                getMetricStatusColor={getMetricStatusColor}
-                getAmperageStatusColor={getAmperageStatusColor}
-                onConfigureThresholds={onConfigureThresholds}
-                onSendRackToMaintenance={onSendRackToMaintenance}
-                onSendChainToMaintenance={onSendChainToMaintenance}
-                onSendAlertToSonar={onSendAlertToSonar}
-                maintenanceRacks={maintenanceRacks}
-                isExpanded={expandedRackNames.has(rackGroup[0].name)}
-                onToggleExpansion={handleToggleRow}
-              />
-            );
-          })}
+        <div className="px-3 pb-6">
+          <CombinedRackCard
+            racks={pdus}
+            overallStatus={overallStatus}
+            getThresholdValue={getThresholdValue}
+            getMetricStatusColor={getMetricStatusColor}
+            getAmperageStatusColor={getAmperageStatusColor}
+            onConfigureThresholds={onConfigureThresholds}
+            onSendRackToMaintenance={onSendRackToMaintenance}
+            onSendChainToMaintenance={onSendChainToMaintenance}
+            onSendAlertToSonar={onSendAlertToSonar}
+            maintenanceRacks={maintenanceRacks}
+            isExpanded={expandedRackNames.has(pdus[0]?.name || '')}
+            onToggleExpansion={() => onToggleRackExpansion(pdus[0]?.name || '')}
+          />
         </div>
       )}
     </div>

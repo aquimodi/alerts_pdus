@@ -5,7 +5,7 @@ import { RackData } from '../types';
 
 interface CountryGroupProps {
   country: string;
-  siteGroups: { [site: string]: { [dc: string]: { [gwKey: string]: RackData[][] } } };
+  siteGroups: { [site: string]: { [dc: string]: { [rackId: string]: { [gwKey: string]: RackData[] } } } };
   originalRackGroups: RackData[][];
   activeView: 'principal' | 'alertas' | 'mantenimiento';
   isExpanded: boolean;
@@ -14,6 +14,8 @@ interface CountryGroupProps {
   toggleSiteExpansion: (site: string) => void;
   expandedDcIds: Set<string>;
   toggleDcExpansion: (dc: string) => void;
+  expandedRackIds: Set<string>;
+  toggleRackIdExpansion: (rackId: string) => void;
   expandedGwIds: Set<string>;
   toggleGwExpansion: (gwKey: string) => void;
   getThresholdValue: (key: string) => number | undefined;
@@ -47,6 +49,8 @@ export default function CountryGroup({
   toggleSiteExpansion,
   expandedDcIds,
   toggleDcExpansion,
+  expandedRackIds,
+  toggleRackIdExpansion,
   expandedGwIds,
   toggleGwExpansion,
   getThresholdValue,
@@ -63,13 +67,11 @@ export default function CountryGroup({
   onToggleRackExpansion
 }: CountryGroupProps) {
 
-  // Calculate total racks for this country from original data (unfiltered)
   const totalRacksForCountry = (originalRackGroups || []).filter(rackGroup => {
     const firstRack = rackGroup[0];
     return (firstRack.country || 'N/A') === country;
   }).length;
 
-  // Calculate total sites for this country from original data (unfiltered)
   const totalSitesForCountry = new Set(
     (originalRackGroups || [])
       .filter(rackGroup => {
@@ -93,7 +95,7 @@ export default function CountryGroup({
     switch (status) {
       case 'normal': return 'Normal';
       case 'warning': return 'Advertencia';
-      case 'critical': return 'Crítico';
+      case 'critical': return 'Critico';
       case 'maintenance': return 'Mantenimiento';
       default: return 'Desconocido';
     }
@@ -101,19 +103,25 @@ export default function CountryGroup({
 
   const getCountryFlag = (country: string): string => {
     switch (country) {
-      case 'España':
-        return '🇪🇸';
+      case 'Espana':
+        return '\uD83C\uDDEA\uD83C\uDDF8';
       default:
-        return '🌍';
+        return '\uD83C\uDF0D';
     }
   };
 
   const displayedRackGroups = React.useMemo(() => {
     const groups: RackData[][] = [];
     Object.values(siteGroups).forEach(dcMap => {
-      Object.values(dcMap).forEach(gwMap => {
-        Object.values(gwMap).forEach(rackGroupList => {
-          groups.push(...rackGroupList);
+      Object.values(dcMap).forEach(rackMap => {
+        Object.values(rackMap).forEach(gwMap => {
+          const rackPdus: RackData[] = [];
+          Object.values(gwMap).forEach(pduList => {
+            rackPdus.push(...pduList);
+          });
+          if (rackPdus.length > 0) {
+            groups.push(rackPdus);
+          }
         });
       });
     });
@@ -122,7 +130,6 @@ export default function CountryGroup({
 
   return (
     <div className="bg-white rounded-lg shadow space-y-6 mb-6 border border-gray-200">
-      {/* Country Header */}
       <div className="p-6">
         <div className="flex items-center justify-between cursor-pointer" onClick={() => onToggleExpand(country)}>
           <div className="flex items-center">
@@ -132,21 +139,20 @@ export default function CountryGroup({
             <div>
               <div className="flex items-center mb-1">
                 <span className="font-semibold text-blue-600 uppercase tracking-wider text-xs">
-                  PAÍS
+                  PAIS
                 </span>
               </div>
               <h1 className="font-bold text-gray-900 text-2xl flex items-center">
                 <span className="mr-2 text-3xl">{getCountryFlag(country)}</span>
-                España
+                Espana
               </h1>
               <p className="text-gray-600 mt-1 flex items-center text-sm">
                 <Building className="mr-1 h-4 w-4" />
-                {totalRacksForCountry} racks • {Object.keys(siteGroups).length} sitio{Object.keys(siteGroups).length !== 1 ? 's' : ''}
+                {totalRacksForCountry} racks {' \u2022 '} {Object.keys(siteGroups).length} sitio{Object.keys(siteGroups).length !== 1 ? 's' : ''}
               </p>
             </div>
           </div>
-          
-          {/* Country Status Summary */}
+
           <div className="flex items-center space-x-3">
             <div className="flex items-center space-x-2">
               {['critical', 'warning', 'normal', 'maintenance'].map(status => {
@@ -170,10 +176,8 @@ export default function CountryGroup({
 
                 if (count === 0 || (activeView === 'alertas' && status === 'normal')) return null;
 
-                // All status counts are now clickable buttons
                 const isActive = activeStatusFilter === status;
 
-                // Define colors based on status
                 let bgActiveClass = 'bg-gray-100';
                 let borderActiveClass = 'border-gray-500';
                 let textActiveClass = 'text-gray-800';
@@ -232,11 +236,10 @@ export default function CountryGroup({
                 );
               })}
             </div>
-            
-            {/* Toggle Button */}
+
             <div
               className="p-1 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
-              title={isExpanded ? "Minimizar País" : "Expandir País"}
+              title={isExpanded ? "Minimizar Pais" : "Expandir Pais"}
             >
               {isExpanded ? (
                 <ChevronUp className="h-5 w-5" />
@@ -247,8 +250,7 @@ export default function CountryGroup({
           </div>
         </div>
       </div>
-      
-      {/* Site Groups within this Country */}
+
       {isExpanded && (
         <div className="space-y-4 px-3 pb-6">
           {Object.entries(siteGroups).sort(([a], [b]) => a.localeCompare(b)).map(([site, dcGroups]) => (
@@ -263,6 +265,8 @@ export default function CountryGroup({
               onToggleExpand={toggleSiteExpansion}
               expandedDcIds={expandedDcIds}
               toggleDcExpansion={toggleDcExpansion}
+              expandedRackIds={expandedRackIds}
+              toggleRackIdExpansion={toggleRackIdExpansion}
               expandedGwIds={expandedGwIds}
               toggleGwExpansion={toggleGwExpansion}
               getThresholdValue={getThresholdValue}

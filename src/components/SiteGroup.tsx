@@ -1,11 +1,11 @@
 import React from 'react';
-import { Home, Layers, ChevronUp, ChevronDown } from 'lucide-react';
+import { Hop as Home, Layers, ChevronUp, ChevronDown } from 'lucide-react';
 import DcGroup from './DcGroup';
 import { RackData } from '../types';
 
 interface SiteGroupProps {
   site: string;
-  dcGroups: { [dc: string]: { [gwKey: string]: RackData[][] } };
+  dcGroups: { [dc: string]: { [rackId: string]: { [gwKey: string]: RackData[] } } };
   originalRackGroups: RackData[][];
   activeView: 'principal' | 'alertas' | 'mantenimiento';
   country: string;
@@ -13,6 +13,8 @@ interface SiteGroupProps {
   onToggleExpand: (site: string) => void;
   expandedDcIds: Set<string>;
   toggleDcExpansion: (dc: string) => void;
+  expandedRackIds: Set<string>;
+  toggleRackIdExpansion: (rackId: string) => void;
   expandedGwIds: Set<string>;
   toggleGwExpansion: (gwKey: string) => void;
   getThresholdValue: (key: string) => number | undefined;
@@ -45,6 +47,8 @@ export default function SiteGroup({
   onToggleExpand,
   expandedDcIds,
   toggleDcExpansion,
+  expandedRackIds,
+  toggleRackIdExpansion,
   expandedGwIds,
   toggleGwExpansion,
   getThresholdValue,
@@ -61,19 +65,17 @@ export default function SiteGroup({
   onToggleRackExpansion
 }: SiteGroupProps) {
 
-  // Calculate total racks for this site from original data (unfiltered)
   const totalRacksForSite = (originalRackGroups || []).filter(rackGroup => {
     const firstRack = rackGroup[0];
-    return (firstRack.country || 'N/A') === country && 
+    return (firstRack.country || 'N/A') === country &&
            (firstRack.site || 'N/A') === site;
   }).length;
 
-  // Calculate total DCs for this site from original data (unfiltered)
   const totalDcsForSite = new Set(
     (originalRackGroups || [])
       .filter(rackGroup => {
         const firstRack = rackGroup[0];
-        return (firstRack.country || 'N/A') === country && 
+        return (firstRack.country || 'N/A') === country &&
                (firstRack.site || 'N/A') === site;
       })
       .map(rackGroup => rackGroup[0].dc || 'N/A')
@@ -93,7 +95,7 @@ export default function SiteGroup({
     switch (status) {
       case 'normal': return 'Normal';
       case 'warning': return 'Advertencia';
-      case 'critical': return 'Crítico';
+      case 'critical': return 'Critico';
       case 'maintenance': return 'Mantenimiento';
       default: return 'Desconocido';
     }
@@ -101,9 +103,15 @@ export default function SiteGroup({
 
   const displayedRackGroups = React.useMemo(() => {
     const groups: RackData[][] = [];
-    Object.values(dcGroups).forEach(gwMap => {
-      Object.values(gwMap).forEach(rackGroupList => {
-        groups.push(...rackGroupList);
+    Object.values(dcGroups).forEach(rackMap => {
+      Object.values(rackMap).forEach(gwMap => {
+        const rackPdus: RackData[] = [];
+        Object.values(gwMap).forEach(pduList => {
+          rackPdus.push(...pduList);
+        });
+        if (rackPdus.length > 0) {
+          groups.push(rackPdus);
+        }
       });
     });
     return groups;
@@ -111,7 +119,6 @@ export default function SiteGroup({
 
   return (
     <div className="bg-white rounded-lg shadow space-y-6 mb-6">
-      {/* Site Header */}
       <div>
         <div className="flex items-center justify-between cursor-pointer p-6" onClick={() => onToggleExpand(site)}>
           <div className="flex items-center">
@@ -129,12 +136,11 @@ export default function SiteGroup({
               </h1>
               <p className="text-gray-600 mt-1 flex items-center text-sm">
                 <Layers className="mr-1 h-4 w-4" />
-                {totalRacksForSite} racks • {totalDcsForSite} Sala{totalDcsForSite !== 1 ? 's' : ''}
+                {totalRacksForSite} racks {' \u2022 '} {totalDcsForSite} Sala{totalDcsForSite !== 1 ? 's' : ''}
               </p>
             </div>
           </div>
-          
-          {/* Site Status Summary */}
+
           <div className="flex items-center space-x-3">
             <div className="flex items-center space-x-2">
               {['critical', 'warning', 'normal', 'maintenance'].map(status => {
@@ -158,10 +164,8 @@ export default function SiteGroup({
 
                 if (count === 0 || (activeView === 'alertas' && status === 'normal')) return null;
 
-                // All status counts are now clickable buttons
                 const isActive = activeStatusFilter === status;
 
-                // Define colors based on status
                 let bgActiveClass = 'bg-gray-100';
                 let borderActiveClass = 'border-gray-500';
                 let textActiveClass = 'text-gray-800';
@@ -220,8 +224,7 @@ export default function SiteGroup({
                 );
               })}
             </div>
-            
-            {/* Toggle Button */}
+
             <div
               className="p-1 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
               title={isExpanded ? "Minimizar Sitio" : "Expandir Sitio"}
@@ -235,20 +238,22 @@ export default function SiteGroup({
           </div>
         </div>
       </div>
-      
+
       {isExpanded && (
         <div className="space-y-4 px-3 pb-6">
-          {Object.entries(dcGroups).sort(([a], [b]) => a.localeCompare(b)).map(([dc, gwGroups]) => (
+          {Object.entries(dcGroups).sort(([a], [b]) => a.localeCompare(b)).map(([dc, rackGroups]) => (
             <DcGroup
               key={dc}
               dc={dc}
-              gwGroups={gwGroups}
+              rackGroups={rackGroups}
               originalRackGroups={originalRackGroups}
               activeView={activeView}
               country={country}
               site={site}
               isExpanded={expandedDcIds.has(dc)}
               onToggleExpand={toggleDcExpansion}
+              expandedRackIds={expandedRackIds}
+              toggleRackIdExpansion={toggleRackIdExpansion}
               expandedGwIds={expandedGwIds}
               toggleGwExpansion={toggleGwExpansion}
               getThresholdValue={getThresholdValue}

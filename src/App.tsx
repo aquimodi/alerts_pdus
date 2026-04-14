@@ -73,6 +73,7 @@ function App() {
     expandedCountryIds,
     expandedSiteIds,
     expandedDcIds,
+    expandedRackIds,
     expandedGwIds,
     activeStatusFilter,
     activeCountryFilter,
@@ -86,6 +87,7 @@ function App() {
     toggleCountryExpansion,
     toggleSiteExpansion,
     toggleDcExpansion,
+    toggleRackIdExpansion,
     toggleGwExpansion,
     setActiveStatusFilter,
     setActiveCountryFilter,
@@ -156,9 +158,15 @@ function App() {
 
     Object.values(groupedRacks).forEach(siteGroups => {
       Object.values(siteGroups).forEach(dcGroups => {
-        Object.values(dcGroups).forEach(gwGroups => {
-          Object.values(gwGroups).forEach(logicalGroups => {
-            rackGroups.push(...logicalGroups);
+        Object.values(dcGroups).forEach(rackMap => {
+          Object.values(rackMap).forEach(gwMap => {
+            const rackPdus: RackData[] = [];
+            Object.values(gwMap).forEach(pduList => {
+              rackPdus.push(...pduList);
+            });
+            if (rackPdus.length > 0) {
+              rackGroups.push(rackPdus);
+            }
           });
         });
       });
@@ -1699,6 +1707,8 @@ function App() {
                       toggleSiteExpansion={toggleSiteExpansion}
                       expandedDcIds={expandedDcIds}
                       toggleDcExpansion={toggleDcExpansion}
+                      expandedRackIds={expandedRackIds}
+                      toggleRackIdExpansion={toggleRackIdExpansion}
                       expandedGwIds={expandedGwIds}
                       toggleGwExpansion={toggleGwExpansion}
                       getThresholdValue={getThresholdValueWrapper}
