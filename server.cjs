@@ -5666,7 +5666,7 @@ app.use((err, req, res, next) => {
 });
 
 // Catch-all handler: serve index.html for any non-API routes (for React Router)
-app.get('*', (req, res) => {
+app.get('/{*splat}', (req, res) => {
   // Only serve index.html for non-API routes
   if (!req.path.startsWith('/api')) {
     const indexPath = path.join(__dirname, 'dist', 'index.html');
