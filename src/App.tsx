@@ -1156,6 +1156,7 @@ function App() {
                       setActiveView('principal');
                       setActiveStatusFilter('all');
                       setActiveMetricFilter('all');
+                      setShowThresholds(false);
                     }}
                     className={`px-5 py-2.5 rounded-md text-sm font-medium transition-all ${
                       activeView === 'principal'
@@ -1167,7 +1168,7 @@ function App() {
                     Principal
                   </button>
                   <button
-                    onClick={() => setActiveView('alertas')}
+                    onClick={() => { setActiveView('alertas'); setShowThresholds(false); }}
                     className={`px-5 py-2.5 rounded-md text-sm font-medium transition-all ${
                       activeView === 'alertas'
                         ? 'bg-blue-600 text-white shadow-md'
@@ -1178,7 +1179,7 @@ function App() {
                     Alertas
                   </button>
                   <button
-                    onClick={() => setActiveView('mantenimiento')}
+                    onClick={() => { setActiveView('mantenimiento'); setShowThresholds(false); }}
                     className={`px-5 py-2.5 rounded-md text-sm font-medium transition-all ${
                       activeView === 'mantenimiento'
                         ? 'bg-blue-600 text-white shadow-md'
