@@ -372,6 +372,37 @@ export default function MaintenancePage() {
     return Array.from(dcs).sort();
   }, [maintenanceEntries, countryFilter, siteFilter]);
 
+  const filteredMaintenanceEntries = useMemo(() => {
+    if (countryFilter === 'all' && siteFilter === 'all' && dcFilter === 'all') {
+      return maintenanceEntries;
+    }
+    return maintenanceEntries.filter(entry => {
+      return entry.racks.some(rack => {
+        if (countryFilter !== 'all' && rack.country !== countryFilter) return false;
+        if (siteFilter !== 'all' && rack.site !== siteFilter) return false;
+        if (dcFilter !== 'all' && rack.dc !== dcFilter) return false;
+        return true;
+      });
+    });
+  }, [maintenanceEntries, countryFilter, siteFilter, dcFilter]);
+
+  const { totalRacks, totalRackRecords } = useMemo(() => {
+    const uniqueIds = new Set<string>();
+    let records = 0;
+    filteredMaintenanceEntries.forEach(entry => {
+      entry.racks.forEach(rack => {
+        records++;
+        if (rack.rack_id) {
+          const rackIdStr = String(rack.rack_id).trim();
+          if (rackIdStr) {
+            uniqueIds.add(rackIdStr);
+          }
+        }
+      });
+    });
+    return { totalRacks: uniqueIds.size, totalRackRecords: records };
+  }, [filteredMaintenanceEntries]);
+
   if (loading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 p-8">
@@ -401,48 +432,6 @@ export default function MaintenancePage() {
       </div>
     );
   }
-
-  const filteredMaintenanceEntries = useMemo(() => {
-    if (countryFilter === 'all' && siteFilter === 'all' && dcFilter === 'all') {
-      return maintenanceEntries;
-    }
-    return maintenanceEntries.filter(entry => {
-      return entry.racks.some(rack => {
-        if (countryFilter !== 'all' && rack.country !== countryFilter) return false;
-        if (siteFilter !== 'all' && rack.site !== siteFilter) return false;
-        if (dcFilter !== 'all' && rack.dc !== dcFilter) return false;
-        return true;
-      });
-    });
-  }, [maintenanceEntries, countryFilter, siteFilter, dcFilter]);
-
-  // Count UNIQUE physical racks across all maintenance entries
-  // Multiple entries can have the same rack_id, so we use a Set to ensure uniqueness
-  // This matches the counting logic used in the main dashboard (App.tsx)
-  const uniqueRackIds = new Set<string>();
-  let totalRackRecords = 0;
-
-  filteredMaintenanceEntries.forEach(entry => {
-    entry.racks.forEach(rack => {
-      totalRackRecords++;
-      if (rack.rack_id) {
-        const rackIdStr = String(rack.rack_id).trim();
-        if (rackIdStr) {
-          uniqueRackIds.add(rackIdStr);
-        }
-      }
-    });
-  });
-
-  const totalRacks = uniqueRackIds.size;
-
-  // Debug logging
-  console.log('🔍 Maintenance Page Rack Count:', {
-    entries: filteredMaintenanceEntries.length,
-    totalRackRecords,
-    uniqueRacks: totalRacks,
-    sampleRackIds: Array.from(uniqueRackIds).slice(0, 5)
-  });
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 p-8">
