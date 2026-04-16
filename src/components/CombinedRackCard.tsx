@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Server, Settings, Wrench, MoreVertical, Zap, Send } from 'lucide-react';
+import { Server, Settings, Wrench, MoveVertical as MoreVertical, Zap, Send } from 'lucide-react';
 import { RackData } from '../types';
 
 interface CombinedRackCardProps {
@@ -361,25 +361,27 @@ export default function CombinedRackCard({
                   </p>
                 </div>
 
-                {/* Temperature */}
-                <div className={`${getMetricBgColor(rack, 'temperature')} rounded-lg p-2`}>
-                  <span className="font-medium text-gray-600 text-xs">
-                    Temperatura
-                  </span>
-                  <p className="font-bold text-gray-900 mt-1 text-sm">
-                    {rack.sensorTemperature != null && !isNaN(rack.sensorTemperature) ? `${rack.sensorTemperature}°C` : 'N/A'}
-                  </p>
-                </div>
+                {rack.sensorTemperature != null && !isNaN(rack.sensorTemperature) && (
+                  <div className={`${getMetricBgColor(rack, 'temperature')} rounded-lg p-2`}>
+                    <span className="font-medium text-gray-600 text-xs">
+                      Temperatura
+                    </span>
+                    <p className="font-bold text-gray-900 mt-1 text-sm">
+                      {rack.sensorTemperature}°C
+                    </p>
+                  </div>
+                )}
 
-                {/* Humidity */}
-                <div className={`${getMetricBgColor(rack, 'humidity')} rounded-lg p-2`}>
-                  <span className="font-medium text-gray-600 text-xs">
-                    Humedad
-                  </span>
-                  <p className="font-bold text-gray-900 mt-1 text-sm">
-                    {rack.sensorHumidity != null && !isNaN(rack.sensorHumidity) ? `${rack.sensorHumidity}%` : 'N/A'}
-                  </p>
-                </div>
+                {rack.sensorHumidity != null && !isNaN(rack.sensorHumidity) && (
+                  <div className={`${getMetricBgColor(rack, 'humidity')} rounded-lg p-2`}>
+                    <span className="font-medium text-gray-600 text-xs">
+                      Humedad
+                    </span>
+                    <p className="font-bold text-gray-900 mt-1 text-sm">
+                      {rack.sensorHumidity}%
+                    </p>
+                  </div>
+                )}
               </div>
 
             </div>
