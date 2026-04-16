@@ -270,13 +270,68 @@ export default function MaintenancePage() {
   const handleExportMaintenance = async () => {
     try {
       setIsExporting(true);
-      const response = await fetch('/api/export/maintenance', {
-        method: 'POST', credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ countryFilter, siteFilter, dcFilter })
+
+      const ExcelJS = (await import('exceljs')).default;
+      const workbook = new ExcelJS.Workbook();
+      const sheet = workbook.addWorksheet('Mantenimiento');
+
+      sheet.columns = [
+        { header: 'Tipo', key: 'tipo', width: 18 },
+        { header: 'Nombre del Rack', key: 'nombre', width: 25 },
+        { header: 'ID Rack', key: 'rackId', width: 20 },
+        { header: 'Pais', key: 'pais', width: 15 },
+        { header: 'Sitio', key: 'sitio', width: 20 },
+        { header: 'Sala', key: 'sala', width: 15 },
+        { header: 'Chain', key: 'chain', width: 15 },
+        { header: 'Node', key: 'node', width: 15 },
+        { header: 'Fase', key: 'fase', width: 10 },
+        { header: 'Gateway', key: 'gateway', width: 20 },
+        { header: 'IP Gateway', key: 'gwIp', width: 18 },
+        { header: 'Usuario', key: 'usuario', width: 20 },
+        { header: 'Razon', key: 'razon', width: 35 },
+        { header: 'Fecha Inicio', key: 'fechaInicio', width: 22 },
+      ];
+
+      const headerRow = sheet.getRow(1);
+      headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E3A5F' } };
+      headerRow.alignment = { horizontal: 'center' };
+
+      filteredEntries.forEach(entry => {
+        const isChain = entry.entry_type === 'chain';
+        entry.racks.forEach(rack => {
+          const dataRow = sheet.addRow({
+            tipo: isChain ? 'Chain Completa' : 'Rack Individual',
+            nombre: rack.name || '',
+            rackId: rack.rack_id || '',
+            pais: rack.country || '',
+            sitio: rack.site || entry.site || '',
+            sala: rack.dc || entry.dc || '',
+            chain: rack.chain || entry.chain || '',
+            node: rack.node || '',
+            fase: rack.phase || '',
+            gateway: rack.gwName || '',
+            gwIp: rack.gwIp || '',
+            usuario: entry.user || '',
+            razon: entry.reason || '',
+            fechaInicio: entry.started_at ? new Date(entry.started_at).toLocaleString('es-ES') : '',
+          });
+
+          const fillColor = isChain ? 'FFFFF3CD' : 'FFDBEAFE';
+          dataRow.eachCell(cell => {
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fillColor } };
+            cell.border = {
+              top: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+              bottom: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+              left: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+              right: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+            };
+          });
+        });
       });
-      if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      const blob = await response.blob();
+
+      const buffer = await workbook.xlsx.writeBuffer();
+      const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
