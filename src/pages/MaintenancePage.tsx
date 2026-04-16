@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { Wrench, Calendar, User, MapPin, Server, CircleAlert as AlertCircle, X, Trash2, ChevronDown, ChevronUp, Upload, Circle as XCircle, Download, RefreshCw, ListFilter as Filter, FileSpreadsheet } from 'lucide-react';
+import { Wrench, Calendar, User, MapPin, Server, CircleAlert as AlertCircle, X, Trash2, ChevronDown, ChevronUp, Upload, Circle as XCircle, Download, RefreshCw, ListFilter as Filter, FileSpreadsheet, Globe, Hop as Home, Building } from 'lucide-react';
 import ImportMaintenanceModal from '../components/ImportMaintenanceModal';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -31,6 +31,14 @@ interface MaintenanceEntry {
   racks: RackDetail[];
 }
 
+interface GroupedMaintenance {
+  [country: string]: {
+    [site: string]: {
+      [dc: string]: MaintenanceEntry[];
+    };
+  };
+}
+
 export default function MaintenancePage() {
   const { user } = useAuth();
   const [maintenanceEntries, setMaintenanceEntries] = useState<MaintenanceEntry[]>([]);
@@ -40,6 +48,9 @@ export default function MaintenancePage() {
   const [removingRackId, setRemovingRackId] = useState<string | null>(null);
   const [removingAll, setRemovingAll] = useState(false);
   const [expandedEntries, setExpandedEntries] = useState<Set<string>>(new Set());
+  const [expandedCountries, setExpandedCountries] = useState<Set<string>>(new Set());
+  const [expandedSites, setExpandedSites] = useState<Set<string>>(new Set());
+  const [expandedDcs, setExpandedDcs] = useState<Set<string>>(new Set());
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [downloadingTemplate, setDownloadingTemplate] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -76,43 +87,52 @@ export default function MaintenancePage() {
     }
   };
 
-  // Check if user can finish maintenance for a specific site
   const canUserFinishMaintenance = (siteName: string | null | undefined): boolean => {
     if (!siteName) return false;
-
-    // Administrators have access to all sites
-    if (user?.rol === 'Administrador') {
-      return true;
-    }
-
-    if (!user?.sitios_asignados || user.sitios_asignados.length === 0) {
-      return true; // No restrictions
-    }
-
-    // Check if user has direct access
-    if (user.sitios_asignados.includes(siteName)) {
-      return true;
-    }
-
-    // Check if this is a Cantabria site and user has any Cantabria access
+    if (user?.rol === 'Administrador') return true;
+    if (!user?.sitios_asignados || user.sitios_asignados.length === 0) return true;
+    if (user.sitios_asignados.includes(siteName)) return true;
     const normalizedSite = siteName.toLowerCase().includes('cantabria') ? 'Cantabria' : siteName;
     if (normalizedSite === 'Cantabria') {
       return user.sitios_asignados.some(assignedSite =>
         assignedSite.toLowerCase().includes('cantabria')
       );
     }
-
     return false;
   };
 
   const toggleExpanded = (entryId: string) => {
     setExpandedEntries(prev => {
       const newSet = new Set(prev);
-      if (newSet.has(entryId)) {
-        newSet.delete(entryId);
-      } else {
-        newSet.add(entryId);
-      }
+      if (newSet.has(entryId)) newSet.delete(entryId);
+      else newSet.add(entryId);
+      return newSet;
+    });
+  };
+
+  const toggleCountry = (country: string) => {
+    setExpandedCountries(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(country)) newSet.delete(country);
+      else newSet.add(country);
+      return newSet;
+    });
+  };
+
+  const toggleSite = (siteKey: string) => {
+    setExpandedSites(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(siteKey)) newSet.delete(siteKey);
+      else newSet.add(siteKey);
+      return newSet;
+    });
+  };
+
+  const toggleDc = (dcKey: string) => {
+    setExpandedDcs(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(dcKey)) newSet.delete(dcKey);
+      else newSet.add(dcKey);
       return newSet;
     });
   };
@@ -142,7 +162,27 @@ export default function MaintenancePage() {
         throw new Error(data.message || 'Failed to fetch maintenance entries');
       }
 
-      setMaintenanceEntries(data.data || []);
+      const entries = data.data || [];
+      setMaintenanceEntries(entries);
+
+      if (entries.length > 0) {
+        const countries = new Set<string>();
+        const sites = new Set<string>();
+        const dcs = new Set<string>();
+        entries.forEach((entry: MaintenanceEntry) => {
+          entry.racks.forEach((rack: RackDetail) => {
+            const c = rack.country || 'N/A';
+            const s = rack.site || 'N/A';
+            const d = rack.dc || 'N/A';
+            countries.add(c);
+            sites.add(`${c}::${s}`);
+            dcs.add(`${c}::${s}::${d}`);
+          });
+        });
+        setExpandedCountries(countries);
+        setExpandedSites(sites);
+        setExpandedDcs(dcs);
+      }
     } catch (err) {
       console.error('Error fetching maintenance entries:', err);
       setError(err instanceof Error ? err.message : 'Unknown error occurred');
@@ -156,7 +196,6 @@ export default function MaintenancePage() {
   }, []);
 
   const handleRemoveEntry = async (entryId: string, entryType: string, identifier: string, entrySite?: string) => {
-    // Check if user has permission
     if (user?.rol === 'Observador') {
       alert('No tienes permisos para finalizar mantenimientos.');
       return;
@@ -166,31 +205,19 @@ export default function MaintenancePage() {
       ? `¿Seguro que quieres sacar toda la chain "${identifier}" de mantenimiento?`
       : `¿Seguro que quieres sacar el rack "${identifier}" de mantenimiento?`;
 
-    if (!confirm(confirmMessage)) {
-      return;
-    }
+    if (!confirm(confirmMessage)) return;
 
     try {
       setRemovingEntryId(entryId);
-
       const response = await fetch(`/api/maintenance/entry/${encodeURIComponent(entryId)}`, {
         method: 'DELETE',
         credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json'
-        }
+        headers: { 'Content-Type': 'application/json' }
       });
 
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-
+      if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       const data = await response.json();
-
-      if (!data.success) {
-        throw new Error(data.message || 'Failed to remove from maintenance');
-      }
-
+      if (!data.success) throw new Error(data.message || 'Failed to remove from maintenance');
       await fetchMaintenanceEntries();
     } catch (err) {
       console.error('Error removing entry from maintenance:', err);
@@ -201,7 +228,6 @@ export default function MaintenancePage() {
   };
 
   const handleRemoveIndividualRack = async (rackId: string, entryType: string, rackSite?: string) => {
-    // Check if user has permission
     if (user?.rol === 'Observador') {
       alert('No tienes permisos para finalizar mantenimientos.');
       return;
@@ -211,31 +237,19 @@ export default function MaintenancePage() {
       ? `¿Seguro que quieres sacar solo este rack "${rackId}" de mantenimiento? (La chain seguirá en mantenimiento)`
       : `¿Seguro que quieres sacar el rack "${rackId}" de mantenimiento?`;
 
-    if (!confirm(confirmMessage)) {
-      return;
-    }
+    if (!confirm(confirmMessage)) return;
 
     try {
       setRemovingRackId(rackId);
-
       const response = await fetch(`/api/maintenance/rack/${encodeURIComponent(rackId)}`, {
         method: 'DELETE',
         credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json'
-        }
+        headers: { 'Content-Type': 'application/json' }
       });
 
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-
+      if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       const data = await response.json();
-
-      if (!data.success) {
-        throw new Error(data.message || 'Failed to remove rack from maintenance');
-      }
-
+      if (!data.success) throw new Error(data.message || 'Failed to remove rack from maintenance');
       await fetchMaintenanceEntries();
     } catch (err) {
       console.error('Error removing rack from maintenance:', err);
@@ -246,49 +260,30 @@ export default function MaintenancePage() {
   };
 
   const handleRemoveAll = async () => {
-    // Check if user has permission
     if (user?.rol === 'Observador') {
       alert('No tienes permisos para finalizar mantenimientos.');
       return;
     }
 
-    if (maintenanceEntries.length === 0) {
-      return;
-    }
+    if (maintenanceEntries.length === 0) return;
 
-    const confirmMessage = `¿Estás COMPLETAMENTE SEGURO de que quieres sacar TODOS los ${totalRacks} racks de mantenimiento?\n\nEsta acción eliminará ${maintenanceEntries.length} ${maintenanceEntries.length === 1 ? 'entrada' : 'entradas'} de mantenimiento y no se puede deshacer.`;
+    const confirmMessage = `¿Estas COMPLETAMENTE SEGURO de que quieres sacar TODOS los ${totalRacks} racks de mantenimiento?\n\nEsta accion eliminara ${maintenanceEntries.length} ${maintenanceEntries.length === 1 ? 'entrada' : 'entradas'} de mantenimiento y no se puede deshacer.`;
 
-    if (!confirm(confirmMessage)) {
-      return;
-    }
-
-    // Double confirmation for safety
-    if (!confirm('Última confirmación: ¿Realmente deseas eliminar TODAS las entradas de mantenimiento?')) {
-      return;
-    }
+    if (!confirm(confirmMessage)) return;
+    if (!confirm('Ultima confirmacion: ¿Realmente deseas eliminar TODAS las entradas de mantenimiento?')) return;
 
     try {
       setRemovingAll(true);
-
       const response = await fetch('/api/maintenance/all', {
         method: 'DELETE',
         credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json'
-        }
+        headers: { 'Content-Type': 'application/json' }
       });
 
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-
+      if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       const data = await response.json();
-
-      if (!data.success) {
-        throw new Error(data.message || 'Failed to remove all maintenance entries');
-      }
-
-      alert(`✅ ${data.data.entriesRemoved} entradas de mantenimiento eliminadas (${data.data.racksRemoved} racks)`);
+      if (!data.success) throw new Error(data.message || 'Failed to remove all maintenance entries');
+      alert(`${data.data.entriesRemoved} entradas de mantenimiento eliminadas (${data.data.racksRemoved} racks)`);
       await fetchMaintenanceEntries();
     } catch (err) {
       console.error('Error removing all maintenance entries:', err);
@@ -311,16 +306,10 @@ export default function MaintenancePage() {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          countryFilter,
-          siteFilter,
-          dcFilter
-        })
+        body: JSON.stringify({ countryFilter, siteFilter, dcFilter })
       });
 
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
+      if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
 
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
@@ -339,11 +328,22 @@ export default function MaintenancePage() {
     }
   };
 
+  const getLocationFromRacks = useCallback((racks: RackDetail[]) => {
+    if (racks.length === 0) return { country: 'N/A', site: 'N/A', dc: 'N/A' };
+    const rack = racks[0];
+    return {
+      country: rack.country || 'N/A',
+      site: rack.site || 'N/A',
+      dc: rack.dc || 'N/A'
+    };
+  }, []);
+
   const availableCountries = useMemo(() => {
     const countries = new Set<string>();
     maintenanceEntries.forEach(entry => {
       entry.racks.forEach(rack => {
-        if (rack.country) countries.add(rack.country);
+        const c = rack.country || 'N/A';
+        if (c) countries.add(c);
       });
     });
     return Array.from(countries).sort();
@@ -353,8 +353,10 @@ export default function MaintenancePage() {
     const sites = new Set<string>();
     maintenanceEntries.forEach(entry => {
       entry.racks.forEach(rack => {
-        if (countryFilter !== 'all' && rack.country !== countryFilter) return;
-        if (rack.site) sites.add(rack.site);
+        const c = rack.country || 'N/A';
+        if (countryFilter !== 'all' && c !== countryFilter) return;
+        const s = rack.site || 'N/A';
+        if (s) sites.add(s);
       });
     });
     return Array.from(sites).sort();
@@ -364,9 +366,12 @@ export default function MaintenancePage() {
     const dcs = new Set<string>();
     maintenanceEntries.forEach(entry => {
       entry.racks.forEach(rack => {
-        if (countryFilter !== 'all' && rack.country !== countryFilter) return;
-        if (siteFilter !== 'all' && rack.site !== siteFilter) return;
-        if (rack.dc) dcs.add(rack.dc);
+        const c = rack.country || 'N/A';
+        const s = rack.site || 'N/A';
+        if (countryFilter !== 'all' && c !== countryFilter) return;
+        if (siteFilter !== 'all' && s !== siteFilter) return;
+        const d = rack.dc || 'N/A';
+        if (d) dcs.add(d);
       });
     });
     return Array.from(dcs).sort();
@@ -378,30 +383,67 @@ export default function MaintenancePage() {
     }
     return maintenanceEntries.filter(entry => {
       return entry.racks.some(rack => {
-        if (countryFilter !== 'all' && rack.country !== countryFilter) return false;
-        if (siteFilter !== 'all' && rack.site !== siteFilter) return false;
-        if (dcFilter !== 'all' && rack.dc !== dcFilter) return false;
+        const c = rack.country || 'N/A';
+        const s = rack.site || 'N/A';
+        const d = rack.dc || 'N/A';
+        if (countryFilter !== 'all' && c !== countryFilter) return false;
+        if (siteFilter !== 'all' && s !== siteFilter) return false;
+        if (dcFilter !== 'all' && d !== dcFilter) return false;
         return true;
       });
     });
   }, [maintenanceEntries, countryFilter, siteFilter, dcFilter]);
 
-  const { totalRacks, totalRackRecords } = useMemo(() => {
+  const { totalRacks } = useMemo(() => {
     const uniqueIds = new Set<string>();
-    let records = 0;
     filteredMaintenanceEntries.forEach(entry => {
       entry.racks.forEach(rack => {
-        records++;
         if (rack.rack_id) {
           const rackIdStr = String(rack.rack_id).trim();
-          if (rackIdStr) {
-            uniqueIds.add(rackIdStr);
-          }
+          if (rackIdStr) uniqueIds.add(rackIdStr);
         }
       });
     });
-    return { totalRacks: uniqueIds.size, totalRackRecords: records };
+    return { totalRacks: uniqueIds.size };
   }, [filteredMaintenanceEntries]);
+
+  const groupedData = useMemo((): GroupedMaintenance => {
+    const grouped: GroupedMaintenance = {};
+
+    filteredMaintenanceEntries.forEach(entry => {
+      const loc = getLocationFromRacks(entry.racks);
+      const country = loc.country;
+      const site = loc.site;
+      const dc = loc.dc;
+
+      if (!grouped[country]) grouped[country] = {};
+      if (!grouped[country][site]) grouped[country][site] = {};
+      if (!grouped[country][site][dc]) grouped[country][site][dc] = [];
+      grouped[country][site][dc].push(entry);
+    });
+
+    return grouped;
+  }, [filteredMaintenanceEntries, getLocationFromRacks]);
+
+  const getCountryFlag = (country: string): string => {
+    const lower = country.toLowerCase();
+    if (lower.includes('espa') || lower.includes('spain')) return '\uD83C\uDDEA\uD83C\uDDF8';
+    return '\uD83C\uDF0D';
+  };
+
+  const getCountryDisplayName = (country: string): string => {
+    const lower = country.toLowerCase();
+    if (lower.includes('espa') || lower === 'espana' || lower === 'españa') return 'Espana';
+    return country;
+  };
+
+  const countRacksInGroup = (entries: MaintenanceEntry[]): number => {
+    const ids = new Set<string>();
+    entries.forEach(e => e.racks.forEach(r => {
+      if (r.rack_id) ids.add(String(r.rack_id).trim());
+    }));
+    return ids.size;
+  };
 
   if (loading) {
     return (
@@ -432,6 +474,169 @@ export default function MaintenancePage() {
       </div>
     );
   }
+
+  const renderEntryCard = (entry: MaintenanceEntry) => {
+    const isChainEntry = entry.entry_type === 'chain';
+    const rackName = !isChainEntry && entry.racks.length > 0
+      ? (entry.racks[0].name || entry.rack_id)
+      : entry.rack_id;
+    const displayTitle = isChainEntry
+      ? `Chain ${entry.chain}`
+      : rackName;
+
+    const bgColor = isChainEntry ? 'from-amber-50 to-amber-100 border-amber-200' : 'from-blue-50 to-blue-100 border-blue-200';
+    const iconColor = isChainEntry ? 'text-amber-700' : 'text-blue-700';
+    const textColor = isChainEntry ? 'text-amber-900' : 'text-blue-900';
+    const isExpanded = expandedEntries.has(entry.id);
+    const canFinishMaintenance = canUserFinishMaintenance(entry.site);
+
+    return (
+      <div
+        key={entry.id}
+        className="bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden"
+      >
+        <div
+          className={`bg-gradient-to-r ${bgColor} border-b p-4 cursor-pointer transition-colors ${
+            isChainEntry
+              ? 'hover:from-amber-100 hover:to-amber-150'
+              : 'hover:from-blue-100 hover:to-blue-150'
+          }`}
+          onClick={() => toggleExpanded(entry.id)}
+        >
+          <div className="flex items-start justify-between">
+            <div className="flex-1">
+              <div className="flex items-center gap-3 mb-2">
+                <Server className={`w-5 h-5 ${iconColor}`} />
+                <h4 className={`text-lg font-bold ${textColor}`}>
+                  {displayTitle}
+                </h4>
+                <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${
+                  isChainEntry
+                    ? 'bg-amber-200 text-amber-800'
+                    : 'bg-blue-200 text-blue-800'
+                }`}>
+                  {isChainEntry ? 'Chain Completa' : 'Rack Individual'}
+                </span>
+                <span className="text-slate-500 text-xs">
+                  {entry.racks.length} rack{entry.racks.length !== 1 ? 's' : ''}
+                </span>
+                <div className={`ml-auto p-1 rounded ${iconColor}`}>
+                  {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-x-6 gap-y-1 text-sm text-slate-600">
+                {isChainEntry && entry.chain && (
+                  <div className="flex items-center gap-1.5">
+                    <Server className={`w-3.5 h-3.5 ${iconColor}`} />
+                    <span className="font-medium">Chain:</span>
+                    <span>{entry.chain}</span>
+                  </div>
+                )}
+                {!isChainEntry && entry.racks.length > 0 && entry.racks[0].gwName && entry.racks[0].gwName !== 'N/A' && (
+                  <div className="flex items-center gap-1.5">
+                    <Server className={`w-3.5 h-3.5 ${iconColor}`} />
+                    <span className="font-medium">Gateway:</span>
+                    <span>{entry.racks[0].gwName} {entry.racks[0].gwIp && entry.racks[0].gwIp !== 'N/A' ? `(${entry.racks[0].gwIp})` : ''}</span>
+                  </div>
+                )}
+                <div className="flex items-center gap-1.5">
+                  <Calendar className="w-3.5 h-3.5" />
+                  <span className="font-medium">Inicio:</span>
+                  <span>{new Date(entry.started_at).toLocaleString('es-ES')}</span>
+                </div>
+                {entry.user && (
+                  <div className="flex items-center gap-1.5">
+                    <User className="w-3.5 h-3.5" />
+                    <span>{entry.user}</span>
+                  </div>
+                )}
+              </div>
+
+              {entry.reason && (
+                <div className="mt-2 flex items-start gap-1.5 text-sm text-slate-700">
+                  <AlertCircle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+                  <span><span className="font-medium">Razon:</span> {entry.reason}</span>
+                </div>
+              )}
+            </div>
+
+            {user?.rol !== 'Observador' && canFinishMaintenance && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleRemoveEntry(
+                    entry.id,
+                    entry.entry_type,
+                    isChainEntry ? `${entry.chain}` : entry.rack_id || '',
+                    entry.site || undefined
+                  );
+                }}
+                disabled={removingEntryId === entry.id}
+                className="ml-3 px-3 py-1.5 text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5 bg-green-600 hover:bg-green-700 text-white flex-shrink-0"
+              >
+                {removingEntryId === entry.id ? (
+                  <>
+                    <div className="animate-spin rounded-full h-3.5 w-3.5 border-2 border-white border-t-transparent"></div>
+                    Procesando...
+                  </>
+                ) : (
+                  <>
+                    <Wrench className="w-3.5 h-3.5" />
+                    Finalizar
+                  </>
+                )}
+              </button>
+            )}
+          </div>
+        </div>
+
+        {isExpanded && (
+          <div className="p-4">
+            <h5 className="font-semibold text-slate-900 mb-3 text-sm">
+              {isChainEntry ? `Racks en esta chain (${entry.racks.length})` : 'Detalle del Rack'}
+            </h5>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {entry.racks.map(rack => {
+                const canFinishRackMaintenance = canUserFinishMaintenance(rack.site);
+                return (
+                  <div
+                    key={rack.rack_id}
+                    className="border border-slate-200 rounded-lg p-3 bg-slate-50 relative group"
+                  >
+                    {isChainEntry && user?.rol !== 'Observador' && canFinishRackMaintenance && (
+                      <button
+                        onClick={() => handleRemoveIndividualRack(rack.rack_id, entry.entry_type, rack.site)}
+                        disabled={removingRackId === rack.rack_id}
+                        className="absolute top-2 right-2 p-1.5 rounded-lg transition-colors opacity-0 group-hover:opacity-100 disabled:opacity-50 bg-red-100 hover:bg-red-200 text-red-700"
+                        title="Sacar solo este rack de mantenimiento"
+                      >
+                        {removingRackId === rack.rack_id ? (
+                          <div className="animate-spin rounded-full h-3.5 w-3.5 border-2 border-red-700 border-t-transparent"></div>
+                        ) : (
+                          <X className="w-3.5 h-3.5" />
+                        )}
+                      </button>
+                    )}
+
+                    <div className="font-medium text-slate-900 mb-1.5 text-sm">
+                      {rack.name || rack.rack_id}
+                    </div>
+                    <div className="space-y-0.5 text-xs text-slate-600">
+                      <div><span className="font-medium">Rack ID:</span> {rack.rack_id}</div>
+                      {rack.chain && <div><span className="font-medium">Chain:</span> {rack.chain}</div>}
+                      {rack.phase && <div><span className="font-medium">Fase:</span> {rack.phase}</div>}
+                      {rack.node && <div><span className="font-medium">Node:</span> {rack.node}</div>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 p-8">
@@ -521,7 +726,6 @@ export default function MaintenancePage() {
             Equipos actualmente en mantenimiento (no generan alertas)
           </p>
 
-          {/* Info banner for users with site restrictions (not for Administrators) */}
           {user?.rol !== 'Administrador' && user?.sitios_asignados && user.sitios_asignados.length > 0 && (
             <div className="mt-4 bg-blue-50 border border-blue-200 rounded-lg p-4">
               <div className="flex items-start gap-3">
@@ -639,246 +843,133 @@ export default function MaintenancePage() {
               No hay equipos en mantenimiento
             </h3>
             <p className="text-slate-500">
-              Todos los equipos están activos y generando alertas normalmente
+              Todos los equipos estan activos y generando alertas normalmente
             </p>
           </div>
         ) : (
           <div className="space-y-6">
-            {filteredMaintenanceEntries.map(entry => {
-              const isChainEntry = entry.entry_type === 'chain';
-              // For individual racks, use the rack name from the first rack detail if available
-              const rackName = !isChainEntry && entry.racks.length > 0
-                ? (entry.racks[0].name || entry.rack_id)
-                : entry.rack_id;
-              const displayTitle = isChainEntry
-                ? `Chain ${entry.chain} - Sala ${entry.dc}`
-                : rackName;
-
-              const bgColor = isChainEntry ? 'from-amber-50 to-amber-100 border-amber-200' : 'from-blue-50 to-blue-100 border-blue-200';
-              const iconColor = isChainEntry ? 'text-amber-700' : 'text-blue-700';
-              const textColor = isChainEntry ? 'text-amber-900' : 'text-blue-900';
-              const isExpanded = expandedEntries.has(entry.id);
-
-              // Check if user can finish this maintenance entry
-              const canFinishMaintenance = canUserFinishMaintenance(entry.site);
+            {Object.entries(groupedData).sort(([a], [b]) => a.localeCompare(b)).map(([country, siteGroups]) => {
+              const countryKey = country;
+              const isCountryExpanded = expandedCountries.has(countryKey);
+              const totalSites = Object.keys(siteGroups).length;
+              const totalCountryEntries = Object.values(siteGroups).flatMap(dcMap => Object.values(dcMap).flat());
+              const totalCountryRacks = countRacksInGroup(totalCountryEntries);
 
               return (
-                <div
-                  key={entry.id}
-                  className="bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden"
-                >
+                <div key={country} className="bg-white rounded-lg shadow border border-gray-200">
                   <div
-                    className={`bg-gradient-to-r ${bgColor} border-b p-6 cursor-pointer transition-colors ${
-                      isChainEntry
-                        ? 'hover:from-amber-100 hover:to-amber-150'
-                        : 'hover:from-blue-100 hover:to-blue-150'
-                    }`}
-                    onClick={() => toggleExpanded(entry.id)}
+                    className="p-6 cursor-pointer flex items-center justify-between"
+                    onClick={() => toggleCountry(countryKey)}
                   >
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1">
-                        <div className="flex items-center gap-3 mb-3">
-                          <Server className={`w-6 h-6 ${iconColor}`} />
-                          <h2 className={`text-2xl font-bold ${textColor}`}>
-                            {displayTitle}
-                          </h2>
-                          <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
-                            isChainEntry
-                              ? 'bg-amber-200 text-amber-800'
-                              : 'bg-blue-200 text-blue-800'
-                          }`}>
-                            {isChainEntry ? 'Chain Completa' : 'Rack Individual'}
-                          </span>
-                          <div className={`ml-2 p-2 rounded-lg ${iconColor}`}>
-                            {isExpanded ? (
-                              <ChevronUp className="w-5 h-5" />
-                            ) : (
-                              <ChevronDown className="w-5 h-5" />
-                            )}
-                          </div>
-                        </div>
-
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-                          {(() => {
-                            const rackData = entry.racks.length > 0 ? entry.racks[0] : null;
-                            const isValidValue = (val: string | null | undefined) => val && val !== 'unknown' && val !== 'Unknown' && val.trim() !== '';
-                            const displaySite = isValidValue(rackData?.site) ? rackData?.site : (isValidValue(entry.site) ? entry.site : null);
-                            const displayDc = isValidValue(rackData?.dc) ? rackData?.dc : (isValidValue(entry.dc) ? entry.dc : null);
-                            return (
-                              <>
-                                {displaySite && (
-                                  <div className="flex items-center gap-2 text-slate-700">
-                                    <MapPin className={`w-4 h-4 ${iconColor}`} />
-                                    <span className="font-medium">Sitio:</span>
-                                    <span>{displaySite}</span>
-                                  </div>
-                                )}
-                                {displayDc && (
-                                  <div className="flex items-center gap-2 text-slate-700">
-                                    <Server className={`w-4 h-4 ${iconColor}`} />
-                                    <span className="font-medium">Sala:</span>
-                                    <span>{displayDc}</span>
-                                  </div>
-                                )}
-                              </>
-                            );
-                          })()}
-                          {isChainEntry && (
-                            <div className="flex items-center gap-2 text-slate-700">
-                              <Server className={`w-4 h-4 ${iconColor}`} />
-                              <span className="font-medium">Chain:</span>
-                              <span>{entry.chain}</span>
-                            </div>
-                          )}
-                        </div>
-
-                        {!isChainEntry && entry.racks.length > 0 && (
-                          <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-                            {entry.racks[0].gwName && entry.racks[0].gwName !== 'N/A' && (
-                              <div className="flex items-center gap-2 text-slate-700">
-                                <Server className={`w-4 h-4 ${iconColor}`} />
-                                <span className="font-medium">Gateway:</span>
-                                <span>{entry.racks[0].gwName}</span>
-                              </div>
-                            )}
-                            {entry.racks[0].gwIp && entry.racks[0].gwIp !== 'N/A' && (
-                              <div className="flex items-center gap-2 text-slate-700">
-                                <Server className={`w-4 h-4 ${iconColor}`} />
-                                <span className="font-medium">IP Gateway:</span>
-                                <span>{entry.racks[0].gwIp}</span>
-                              </div>
-                            )}
-                          </div>
-                        )}
-
-                        <div className="mt-4 space-y-2 text-sm">
-                          <div className="flex items-center gap-2 text-slate-600">
-                            <Calendar className="w-4 h-4" />
-                            <span className="font-medium">Inicio:</span>
-                            <span>{new Date(entry.started_at).toLocaleString('es-ES')}</span>
-                          </div>
-
-                          {entry.user && (
-                            <div className="flex items-center gap-2 text-slate-600">
-                              <User className="w-4 h-4" />
-                              <span className="font-medium">Usuario:</span>
-                              <span>{entry.user}</span>
-                            </div>
-                          )}
-
-                          {entry.reason && (
-                            <div className="flex items-start gap-2 text-slate-700">
-                              <AlertCircle className="w-4 h-4 mt-0.5" />
-                              <div>
-                                <span className="font-medium">Razón:</span> {entry.reason}
-                              </div>
-                            </div>
-                          )}
-                        </div>
+                    <div className="flex items-center">
+                      <div className="bg-blue-600 rounded-full mr-4 p-2">
+                        <Globe className="text-white h-6 w-6" />
                       </div>
-
-                      {user?.rol !== 'Observador' && canFinishMaintenance && (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleRemoveEntry(
-                              entry.id,
-                              entry.entry_type,
-                              isChainEntry ? `${entry.chain} (Sala ${entry.dc})` : entry.rack_id || '',
-                              entry.site || undefined
-                            );
-                          }}
-                          disabled={removingEntryId === entry.id}
-                          className="ml-4 px-4 py-2 font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white"
-                        >
-                          {removingEntryId === entry.id ? (
-                            <>
-                              <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>
-                              Procesando...
-                            </>
-                          ) : (
-                            <>
-                              <Wrench className="w-4 h-4" />
-                              Finalizar Mantenimiento
-                            </>
-                          )}
-                        </button>
-                      )}
+                      <div>
+                        <span className="font-semibold text-blue-600 uppercase tracking-wider text-xs">PAIS</span>
+                        <h2 className="font-bold text-gray-900 text-2xl flex items-center">
+                          <span className="mr-2 text-3xl">{getCountryFlag(country)}</span>
+                          {getCountryDisplayName(country)}
+                        </h2>
+                        <p className="text-gray-600 mt-1 text-sm">
+                          {totalCountryRacks} rack{totalCountryRacks !== 1 ? 's' : ''} {' \u2022 '} {totalSites} sitio{totalSites !== 1 ? 's' : ''}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className="bg-amber-100 text-amber-800 text-xs font-semibold px-3 py-1 rounded-full">
+                        {totalCountryEntries.length} {totalCountryEntries.length === 1 ? 'entrada' : 'entradas'}
+                      </span>
+                      <div className="p-1 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors">
+                        {isCountryExpanded ? <ChevronUp className="h-5 w-5" /> : <ChevronDown className="h-5 w-5" />}
+                      </div>
                     </div>
                   </div>
 
-                  {isExpanded && (
-                    <div className="p-6">
-                      <h3 className="font-semibold text-slate-900 mb-4">
-                        {isChainEntry ? `Racks en esta chain (${entry.racks.length})` : 'Detalle del Rack'}
-                      </h3>
-                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                        {entry.racks.map(rack => {
-                          // Check if user can finish this specific rack's maintenance
-                          const canFinishRackMaintenance = canUserFinishMaintenance(rack.site);
+                  {isCountryExpanded && (
+                    <div className="space-y-4 px-3 pb-6">
+                      {Object.entries(siteGroups).sort(([a], [b]) => a.localeCompare(b)).map(([site, dcGroups]) => {
+                        const siteKey = `${country}::${site}`;
+                        const isSiteExpanded = expandedSites.has(siteKey);
+                        const totalDcs = Object.keys(dcGroups).length;
+                        const totalSiteEntries = Object.values(dcGroups).flat();
+                        const totalSiteRacks = countRacksInGroup(totalSiteEntries);
 
-                          return (
-                        <div
-                          key={rack.rack_id}
-                          className="border border-slate-200 rounded-lg p-4 bg-slate-50 relative group"
-                        >
-                          {isChainEntry && user?.rol !== 'Observador' && canFinishRackMaintenance && (
-                            <button
-                              onClick={() => handleRemoveIndividualRack(rack.rack_id, entry.entry_type, rack.site)}
-                              disabled={removingRackId === rack.rack_id}
-                              className="absolute top-2 right-2 p-2 rounded-lg transition-colors opacity-0 group-hover:opacity-100 disabled:opacity-50 bg-red-100 hover:bg-red-200 text-red-700"
-                              title="Sacar solo este rack de mantenimiento"
+                        return (
+                          <div key={site} className="bg-white rounded-lg shadow">
+                            <div
+                              className="flex items-center justify-between cursor-pointer p-6"
+                              onClick={() => toggleSite(siteKey)}
                             >
-                              {removingRackId === rack.rack_id ? (
-                                <div className="animate-spin rounded-full h-4 w-4 border-2 border-red-700 border-t-transparent"></div>
-                              ) : (
-                                <X className="w-4 h-4" />
-                              )}
-                            </button>
-                          )}
-
-                          <div className="font-medium text-slate-900 mb-2">
-                            {rack.name || rack.rack_id}
-                          </div>
-                          <div className="space-y-1 text-sm text-slate-600">
-                            <div>
-                              <span className="font-medium">Rack ID:</span> {rack.rack_id}
+                              <div className="flex items-center">
+                                <div className="bg-blue-600 rounded-full mr-4 p-2">
+                                  <Home className="text-white h-6 w-6" />
+                                </div>
+                                <div>
+                                  <span className="font-semibold text-blue-600 uppercase tracking-wider text-xs">SITIO</span>
+                                  <h3 className="font-bold text-gray-900 text-2xl">
+                                    {site === 'N/A' ? 'Sin Sitio Definido' : site}
+                                  </h3>
+                                  <p className="text-gray-600 mt-1 text-sm">
+                                    {totalSiteRacks} rack{totalSiteRacks !== 1 ? 's' : ''} {' \u2022 '} {totalDcs} Sala{totalDcs !== 1 ? 's' : ''}
+                                  </p>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-3">
+                                <span className="bg-amber-100 text-amber-800 text-xs font-semibold px-3 py-1 rounded-full">
+                                  {totalSiteEntries.length} {totalSiteEntries.length === 1 ? 'entrada' : 'entradas'}
+                                </span>
+                                <div className="p-1 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors">
+                                  {isSiteExpanded ? <ChevronUp className="h-5 w-5" /> : <ChevronDown className="h-5 w-5" />}
+                                </div>
+                              </div>
                             </div>
-                            {rack.country && (
-                              <div>
-                                <span className="font-medium">País:</span> España
-                              </div>
-                            )}
-                            {rack.site && (
-                              <div>
-                                <span className="font-medium">Sitio:</span> {rack.site}
-                              </div>
-                            )}
-                            {rack.dc && (
-                              <div>
-                                <span className="font-medium">Sala:</span> {rack.dc}
-                              </div>
-                            )}
-                            {rack.chain && (
-                              <div>
-                                <span className="font-medium">Chain:</span> {rack.chain}
-                              </div>
-                            )}
-                            {rack.phase && (
-                              <div>
-                                <span className="font-medium">Fase:</span> {rack.phase}
-                              </div>
-                            )}
-                            {rack.node && (
-                              <div>
-                                <span className="font-medium">Node:</span> {rack.node}
+
+                            {isSiteExpanded && (
+                              <div className="space-y-4 px-3 pb-6">
+                                {Object.entries(dcGroups).sort(([a], [b]) => a.localeCompare(b)).map(([dc, entries]) => {
+                                  const dcKey = `${country}::${site}::${dc}`;
+                                  const isDcExpanded = expandedDcs.has(dcKey);
+                                  const dcRackCount = countRacksInGroup(entries);
+
+                                  return (
+                                    <div key={dc} className="bg-white rounded-lg shadow border-2 border-blue-600">
+                                      <div
+                                        className="flex items-center justify-between cursor-pointer p-6"
+                                        onClick={() => toggleDc(dcKey)}
+                                      >
+                                        <div className="flex items-center">
+                                          <div className="bg-blue-600 rounded-full mr-3 p-2">
+                                            <Building className="text-white h-5 w-5" />
+                                          </div>
+                                          <div>
+                                            <span className="font-semibold text-blue-600 uppercase tracking-wider text-xs">SALA</span>
+                                            <h4 className="font-bold text-gray-900 text-lg">
+                                              {dc === 'N/A' ? 'Sin Sala Definida' : dc}
+                                            </h4>
+                                            <p className="text-gray-600 mt-1 text-sm">
+                                              {dcRackCount} rack{dcRackCount !== 1 ? 's' : ''} {' \u2022 '} {entries.length} {entries.length === 1 ? 'entrada' : 'entradas'}
+                                            </p>
+                                          </div>
+                                        </div>
+                                        <div className="p-1 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors">
+                                          {isDcExpanded ? <ChevronUp className="h-5 w-5" /> : <ChevronDown className="h-5 w-5" />}
+                                        </div>
+                                      </div>
+
+                                      {isDcExpanded && (
+                                        <div className="space-y-3 px-4 pb-4">
+                                          {entries.map(entry => renderEntryCard(entry))}
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })}
                               </div>
                             )}
                           </div>
-                          </div>
-                          );
-                        })}
-                      </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
