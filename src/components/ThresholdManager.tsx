@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Settings, Save, RefreshCw, TriangleAlert as AlertTriangle, CircleCheck as CheckCircle, Database, X, Users } from 'lucide-react';
+import { Settings, Save, RefreshCw, TriangleAlert as AlertTriangle, CircleCheck as CheckCircle, Database, X, Users, Server } from 'lucide-react';
 import { ThresholdData } from '../types';
 import { useAuth } from '../contexts/AuthContext';
 import UserManagement from './UserManagement';
+import RackOverridesManager from './RackOverridesManager';
 
 interface ThresholdManagerProps {
   thresholds: ThresholdData[];
@@ -12,7 +13,7 @@ interface ThresholdManagerProps {
 
 export default function ThresholdManager({ thresholds, onSaveSuccess, onClose }: ThresholdManagerProps) {
   const { user } = useAuth();
-  const [activeTab, setActiveTab] = useState<'thresholds' | 'users'>('thresholds');
+  const [activeTab, setActiveTab] = useState<'thresholds' | 'users' | 'rackOverrides'>('thresholds');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -214,6 +215,17 @@ export default function ThresholdManager({ thresholds, onSaveSuccess, onClose }:
               Umbrales Generales
             </button>
             <button
+              onClick={() => setActiveTab('rackOverrides')}
+              className={`px-4 py-2 text-sm font-medium transition-colors ${
+                activeTab === 'rackOverrides'
+                  ? 'border-b-2 border-blue-600 text-blue-600'
+                  : 'text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              <Server className="h-4 w-4 inline mr-2" />
+              Umbrales por Rack
+            </button>
+            <button
               onClick={() => setActiveTab('users')}
               className={`px-4 py-2 text-sm font-medium transition-colors ${
                 activeTab === 'users'
@@ -231,6 +243,8 @@ export default function ThresholdManager({ thresholds, onSaveSuccess, onClose }:
       {/* Content */}
       {activeTab === 'users' ? (
         <UserManagement readOnly={!isAdmin} />
+      ) : activeTab === 'rackOverrides' ? (
+        <RackOverridesManager readOnly={user?.rol === 'Observador'} />
       ) : (
         <>
           <div className="mb-6">

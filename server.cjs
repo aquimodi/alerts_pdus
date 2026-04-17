@@ -253,6 +253,7 @@ async function initializeDatabaseConnection() {
   try {
     await getPool();
     await ensureLocationAlertConfigTable();
+    await ensureRackThresholdOverridesColumns();
     await loadLocationAlertConfig();
     logger.debug('Database initialization complete');
   } catch (error) {
@@ -285,6 +286,26 @@ function isLocationAlertEnabled(site) {
   if (!normalized) return true;
   if (!locationAlertConfig.has(normalized)) return true;
   return locationAlertConfig.get(normalized);
+}
+
+async function ensureRackThresholdOverridesColumns() {
+  try {
+    await executeQuery(async (pool) => {
+      await pool.request().query(`
+        IF NOT EXISTS (
+          SELECT 1 FROM sys.columns
+          WHERE Name = N'comentario'
+          AND Object_ID = Object_ID(N'dbo.rack_threshold_overrides')
+        )
+        BEGIN
+          ALTER TABLE dbo.rack_threshold_overrides ADD comentario NVARCHAR(MAX) NULL;
+        END
+      `);
+    });
+    logger.debug('rack_threshold_overrides.comentario column ensured');
+  } catch (error) {
+    logger.error('Error ensuring comentario column', { error: error.message });
+  }
 }
 
 async function ensureLocationAlertConfigTable() {
@@ -3104,7 +3125,7 @@ app.get('/api/thresholds', requireAuth, async (req, res) => {
 });
 
 // Endpoint para actualizar umbrales globales (only Administrador and Operador)
-app.put('/api/thresholds', requireAuth, requireRole('Administrador', 'Operador'), async (req, res) => {
+app.put('/api/thresholds', requireAuth, requireRole('Administrador'), async (req, res) => {
   try {
 
     const { thresholds } = req.body;
@@ -3345,6 +3366,104 @@ app.delete('/api/racks/:rackId/thresholds', requireAuth, requireRole('Administra
     });
   }
 });
+
+// ============================================
+// RACK THRESHOLD OVERRIDES LIST ENDPOINTS
+// ============================================
+
+// List all rack threshold overrides (auth required - readable by all authenticated users)
+app.get('/api/rack-threshold-overrides', requireAuth, async (req, res) => {
+  try {
+    const results = await executeQuery(async (pool) => {
+      return await pool.request().query(`
+        SELECT
+          id,
+          rack_id,
+          threshold_key,
+          value,
+          unit,
+          comentario,
+          created_at,
+          updated_at
+        FROM dbo.rack_threshold_overrides
+        ORDER BY rack_id ASC, threshold_key ASC
+      `);
+    });
+
+    res.json({
+      success: true,
+      data: results.recordset || [],
+      count: (results.recordset || []).length,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    logger.error('Error listing rack threshold overrides', { error: error.message });
+    res.status(500).json({
+      success: false,
+      message: 'Failed to list rack threshold overrides',
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Update the comentario for a specific rack threshold override
+// Editable by all authenticated users EXCEPT 'Observador'
+app.put('/api/rack-threshold-overrides/:id/comentario',
+  requireAuth,
+  requireRole('Administrador', 'Operador', 'Tecnico'),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { comentario } = req.body;
+
+      if (typeof comentario !== 'string') {
+        return res.status(400).json({
+          success: false,
+          message: 'El campo comentario debe ser una cadena de texto',
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      const result = await executeQuery(async (pool) => {
+        return await pool.request()
+          .input('id', sql.UniqueIdentifier, id)
+          .input('comentario', sql.NVarChar(sql.MAX), comentario)
+          .query(`
+            UPDATE dbo.rack_threshold_overrides
+            SET comentario = @comentario,
+                updated_at = GETDATE()
+            WHERE id = @id
+          `);
+      });
+
+      if (result.rowsAffected[0] === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'Registro no encontrado',
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      res.json({
+        success: true,
+        message: 'Comentario actualizado correctamente',
+        timestamp: new Date().toISOString()
+      });
+    } catch (error) {
+      logger.error('Error updating rack threshold override comentario', {
+        error: error.message,
+        id: req.params.id
+      });
+      res.status(500).json({
+        success: false,
+        message: 'Error al actualizar el comentario',
+        error: error.message,
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
 
 // ============================================
 // MAINTENANCE MODE ENDPOINTS
