@@ -449,18 +449,26 @@ export default function DashboardPage({
                 </div>
               </div>
 
-              <div className="space-y-5">
-                {siteGroup.cpds.map(cpd => (
+              <div className="flex flex-col gap-5">
+                {siteGroup.cpds.map(cpd => {
+                  const isSameAsParent = cpd.cpdName.trim().toLowerCase() === siteGroup.parentSite.trim().toLowerCase();
+                  const childLabel = isSameAsParent ? 'Principal' : cpd.cpdName;
+                  return (
                   <div
                     key={`${cpd.country}-${cpd.site}`}
-                    className="rounded-xl border border-slate-200 bg-slate-50/60 p-4"
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50/60 p-4"
                   >
                     <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
                       <div className="flex items-center gap-2">
                         <Server className="h-4 w-4 text-slate-600" />
-                        <h3 className="text-base font-semibold text-slate-800">
-                          CPD {cpd.site}
-                        </h3>
+                        <div className="flex items-baseline gap-2">
+                          <h3 className="text-base font-semibold text-slate-800">
+                            {childLabel}
+                          </h3>
+                          <span className="text-[11px] text-slate-500">
+                            {siteGroup.parentSite} &rsaquo; {childLabel}
+                          </span>
+                        </div>
                       </div>
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-white text-slate-600 border border-slate-200">
@@ -494,7 +502,8 @@ export default function DashboardPage({
                       })}
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           ))}
