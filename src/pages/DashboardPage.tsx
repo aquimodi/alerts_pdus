@@ -11,19 +11,27 @@ interface DashboardPageProps {
   loading?: boolean;
 }
 
-function parseSite(raw: string): { parent: string; cpd: string } {
+function parseDcParts(raw: string, site: string): { cpd: string; sala: string } {
   const trimmed = (raw || '').trim();
-  if (!trimmed) return { parent: 'Sin Sitio', cpd: 'Sin CPD' };
+  if (!trimmed) return { cpd: 'Principal', sala: 'Sin Sala' };
   const parts = trimmed.split(/\s+/);
-  if (parts.length === 1) return { parent: parts[0], cpd: parts[0] };
-  return { parent: parts[0], cpd: parts.slice(1).join(' ') };
-}
+  const siteTrim = (site || '').trim().toLowerCase();
 
-function parseSala(raw: string): string {
-  const trimmed = (raw || '').trim();
-  if (!trimmed) return 'Sin Sala';
-  const parts = trimmed.split(/\s+/);
-  return parts[0];
+  if (parts.length === 1) {
+    const only = parts[0];
+    if (only.toLowerCase() === siteTrim) {
+      return { cpd: 'Principal', sala: only };
+    }
+    return { cpd: only, sala: only };
+  }
+
+  let cpdIdx = 0;
+  if (parts[0].toLowerCase() === siteTrim && parts.length > 1) {
+    cpdIdx = 1;
+  }
+  const cpd = parts[cpdIdx];
+  const salaRest = parts.slice(cpdIdx + 1).join(' ').trim();
+  return { cpd, sala: salaRest || cpd };
 }
 
 interface DcSummary {
@@ -95,12 +103,11 @@ export default function DashboardPage({
       const key = `${country}||${site}||${dc}`;
 
       if (!map.has(key)) {
-        const { parent, cpd: cpdName } = parseSite(site);
-        const salaName = parseSala(dc);
+        const { cpd: cpdName, sala: salaName } = parseDcParts(dc, site);
         map.set(key, {
           country,
           site,
-          parentSite: parent,
+          parentSite: site,
           cpdName,
           dc,
           salaName,
@@ -250,8 +257,8 @@ export default function DashboardPage({
       }
       const sg = siteMap.get(siteKey)!;
 
-      const cpdKey = `${s.country}||${s.site}`;
-      let cpd = sg.cpds.find(c => `${c.country}||${c.site}` === cpdKey);
+      const cpdKey = `${s.country}||${s.site}||${s.cpdName}`;
+      let cpd = sg.cpds.find(c => `${c.country}||${c.site}||${c.cpdName}` === cpdKey);
       if (!cpd) {
         cpd = {
           country: s.country,
@@ -425,7 +432,7 @@ export default function DashboardPage({
                       <span className="font-medium">{siteGroup.country}</span>
                     </div>
                     <h2 className="text-xl font-bold text-slate-900 tracking-tight">
-                      CPD {siteGroup.parentSite}
+                      {siteGroup.parentSite}
                     </h2>
                   </div>
                 </div>
@@ -451,24 +458,18 @@ export default function DashboardPage({
 
               <div className="flex flex-col gap-5">
                 {siteGroup.cpds.map(cpd => {
-                  const isSameAsParent = cpd.cpdName.trim().toLowerCase() === siteGroup.parentSite.trim().toLowerCase();
-                  const childLabel = isSameAsParent ? 'Principal' : cpd.cpdName;
+                  const childLabel = cpd.cpdName;
                   return (
                   <div
-                    key={`${cpd.country}-${cpd.site}`}
+                    key={`${cpd.country}-${cpd.site}-${cpd.cpdName}`}
                     className="w-full rounded-xl border border-slate-200 bg-slate-50/60 p-4"
                   >
                     <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
                       <div className="flex items-center gap-2">
                         <Server className="h-4 w-4 text-slate-600" />
-                        <div className="flex items-baseline gap-2">
-                          <h3 className="text-base font-semibold text-slate-800">
-                            {childLabel}
-                          </h3>
-                          <span className="text-[11px] text-slate-500">
-                            {siteGroup.parentSite} &rsaquo; {childLabel}
-                          </span>
-                        </div>
+                        <h3 className="text-base font-semibold text-slate-800">
+                          CPD {siteGroup.parentSite} {childLabel}
+                        </h3>
                       </div>
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-white text-slate-600 border border-slate-200">
