@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Users, Plus, Edit2, Trash2, Save, X, AlertTriangle, CheckCircle } from 'lucide-react';
+import { Users, Plus, CreditCard as Edit2, Trash2, Save, X, TriangleAlert as AlertTriangle, CircleCheck as CheckCircle } from 'lucide-react';
 
 interface User {
   id: string;
@@ -11,7 +11,11 @@ interface User {
   fecha_modificacion: string;
 }
 
-export default function UserManagement() {
+interface UserManagementProps {
+  readOnly?: boolean;
+}
+
+export default function UserManagement({ readOnly = false }: UserManagementProps) {
   const [users, setUsers] = useState<User[]>([]);
   const [sites, setSites] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
@@ -221,14 +225,25 @@ export default function UserManagement() {
           Gestión de Usuarios
         </h2>
 
-        <button
-          onClick={handleCreate}
-          className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700"
-        >
-          <Plus className="h-4 w-4 mr-2" />
-          Nuevo Usuario
-        </button>
+        {!readOnly && (
+          <button
+            onClick={handleCreate}
+            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700"
+          >
+            <Plus className="h-4 w-4 mr-2" />
+            Nuevo Usuario
+          </button>
+        )}
       </div>
+
+      {readOnly && (
+        <div className="mb-4 bg-amber-50 border border-amber-200 rounded-lg p-3 flex items-start">
+          <AlertTriangle className="h-5 w-5 text-amber-500 mr-2 mt-0.5 flex-shrink-0" />
+          <div className="text-sm text-amber-800">
+            <span className="font-semibold">Solo lectura:</span> La creacion, modificacion, eliminacion y activacion/desactivacion de usuarios estan reservadas al rol Administrador.
+          </div>
+        </div>
+      )}
 
       {error && (
         <div className="mb-4 bg-red-50 border border-red-200 rounded-lg p-4">
@@ -319,20 +334,26 @@ export default function UserManagement() {
                     {new Date(user.fecha_creacion).toLocaleDateString()}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                    <button
-                      onClick={() => handleEdit(user)}
-                      className="text-blue-600 hover:text-blue-900 mr-3"
-                      title="Editar usuario"
-                    >
-                      <Edit2 className="h-4 w-4 inline" />
-                    </button>
-                    <button
-                      onClick={() => handleDelete(user)}
-                      className="text-red-600 hover:text-red-900"
-                      title="Eliminar usuario"
-                    >
-                      <Trash2 className="h-4 w-4 inline" />
-                    </button>
+                    {readOnly ? (
+                      <span className="text-xs text-gray-400 italic">Sin acciones</span>
+                    ) : (
+                      <>
+                        <button
+                          onClick={() => handleEdit(user)}
+                          className="text-blue-600 hover:text-blue-900 mr-3"
+                          title="Editar usuario"
+                        >
+                          <Edit2 className="h-4 w-4 inline" />
+                        </button>
+                        <button
+                          onClick={() => handleDelete(user)}
+                          className="text-red-600 hover:text-red-900"
+                          title="Eliminar usuario"
+                        >
+                          <Trash2 className="h-4 w-4 inline" />
+                        </button>
+                      </>
+                    )}
                   </td>
                 </tr>
               ))}

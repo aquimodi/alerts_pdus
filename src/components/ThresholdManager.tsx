@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Settings, Save, RefreshCw, AlertTriangle, CheckCircle, Database, X, Users } from 'lucide-react';
+import { Settings, Save, RefreshCw, TriangleAlert as AlertTriangle, CircleCheck as CheckCircle, Database, X, Users } from 'lucide-react';
 import { ThresholdData } from '../types';
 import { useAuth } from '../contexts/AuthContext';
 import UserManagement from './UserManagement';
@@ -178,7 +178,7 @@ export default function ThresholdManager({ thresholds, onSaveSuccess, onClose }:
   };
 
   const isAdmin = user?.rol === 'Administrador';
-  const isReadOnly = user?.rol === 'Observador';
+  const isReadOnly = user?.rol !== 'Administrador';
 
   return (
     <div className="bg-white rounded-lg shadow-lg p-6 mb-6 relative">
@@ -199,7 +199,7 @@ export default function ThresholdManager({ thresholds, onSaveSuccess, onClose }:
       </div>
 
       {/* Tabs */}
-      {isAdmin && (
+      {(
         <div className="mb-6 border-b border-gray-200">
           <div className="flex space-x-4">
             <button
@@ -229,14 +229,22 @@ export default function ThresholdManager({ thresholds, onSaveSuccess, onClose }:
       )}
 
       {/* Content */}
-      {activeTab === 'users' && isAdmin ? (
-        <UserManagement />
+      {activeTab === 'users' ? (
+        <UserManagement readOnly={!isAdmin} />
       ) : (
         <>
           <div className="mb-6">
             <h3 className="text-lg font-semibold text-gray-900 mb-4">
               Umbrales Generales del Sistema
             </h3>
+            {isReadOnly && (
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 flex items-start">
+                <AlertTriangle className="h-5 w-5 text-amber-500 mr-2 mt-0.5 flex-shrink-0" />
+                <div className="text-sm text-amber-800">
+                  <span className="font-semibold">Solo lectura:</span> La modificacion de umbrales generales esta reservada al rol Administrador.
+                </div>
+              </div>
+            )}
           </div>
 
       {/* Status Messages */}

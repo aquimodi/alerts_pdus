@@ -1308,21 +1308,19 @@ function App() {
                       )}
                   </div>
 
-                  {/* Settings Button - Hidden for Tecnico and Observador */}
-                  {(user?.rol === 'Administrador' || user?.rol === 'Operador') && (
-                    <button
-                      onClick={() => setShowThresholds(!showThresholds)}
-                      className={`inline-flex items-center px-4 py-2.5 border text-sm font-medium rounded-lg transition-all ${
-                        showThresholds
-                          ? 'text-blue-700 bg-blue-100 border-blue-200 shadow-sm'
-                          : 'text-blue-700 bg-blue-50 border-blue-200 hover:bg-blue-100 hover:border-blue-300 hover:shadow-sm'
-                      }`}
-                      title={showThresholds ? "Cerrar Configuración" : "Abrir Configuración"}
-                    >
-                      <Settings className="h-4 w-4 mr-2" />
-                      Configuración
-                    </button>
-                  )}
+                  {/* Settings Button - Visible to all (read-only for non-admins) */}
+                  <button
+                    onClick={() => setShowThresholds(!showThresholds)}
+                    className={`inline-flex items-center px-4 py-2.5 border text-sm font-medium rounded-lg transition-all ${
+                      showThresholds
+                        ? 'text-blue-700 bg-blue-100 border-blue-200 shadow-sm'
+                        : 'text-blue-700 bg-blue-50 border-blue-200 hover:bg-blue-100 hover:border-blue-300 hover:shadow-sm'
+                    }`}
+                    title={showThresholds ? "Cerrar Configuración" : "Abrir Configuración"}
+                  >
+                    <Settings className="h-4 w-4 mr-2" />
+                    Configuración
+                  </button>
 
                   {/* Logout Button */}
                   <button
