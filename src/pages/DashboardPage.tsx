@@ -11,10 +11,28 @@ interface DashboardPageProps {
   loading?: boolean;
 }
 
+function parseSite(raw: string): { parent: string; cpd: string } {
+  const trimmed = (raw || '').trim();
+  if (!trimmed) return { parent: 'Sin Sitio', cpd: 'Sin CPD' };
+  const parts = trimmed.split(/\s+/);
+  if (parts.length === 1) return { parent: parts[0], cpd: parts[0] };
+  return { parent: parts[0], cpd: parts.slice(1).join(' ') };
+}
+
+function parseSala(raw: string): string {
+  const trimmed = (raw || '').trim();
+  if (!trimmed) return 'Sin Sala';
+  const parts = trimmed.split(/\s+/);
+  return parts[0];
+}
+
 interface DcSummary {
   country: string;
   site: string;
+  parentSite: string;
+  cpdName: string;
   dc: string;
+  salaName: string;
   totalRacks: number;
   totalPdus: number;
   criticalPdus: number;
@@ -77,10 +95,15 @@ export default function DashboardPage({
       const key = `${country}||${site}||${dc}`;
 
       if (!map.has(key)) {
+        const { parent, cpd: cpdName } = parseSite(site);
+        const salaName = parseSala(dc);
         map.set(key, {
           country,
           site,
+          parentSite: parent,
+          cpdName,
           dc,
+          salaName,
           totalRacks: 0,
           totalPdus: 0,
           criticalPdus: 0,
@@ -192,25 +215,78 @@ export default function DashboardPage({
     );
   }, [dcSummaries]);
 
-  const cpdGroups = useMemo(() => {
-    const map = new Map<string, { country: string; site: string; salas: DcSummary[]; criticalCount: number; warningCount: number }>();
+  interface CpdGroup {
+    country: string;
+    site: string;
+    cpdName: string;
+    salas: DcSummary[];
+    criticalCount: number;
+    warningCount: number;
+  }
+
+  interface SiteGroup {
+    country: string;
+    parentSite: string;
+    cpds: CpdGroup[];
+    criticalCount: number;
+    warningCount: number;
+    totalSalas: number;
+  }
+
+  const siteGroups = useMemo<SiteGroup[]>(() => {
+    const siteMap = new Map<string, SiteGroup>();
+
     dcSummaries.forEach(s => {
-      const key = `${s.country}||${s.site}`;
-      if (!map.has(key)) {
-        map.set(key, { country: s.country, site: s.site, salas: [], criticalCount: 0, warningCount: 0 });
+      const siteKey = `${s.country}||${s.parentSite}`;
+      if (!siteMap.has(siteKey)) {
+        siteMap.set(siteKey, {
+          country: s.country,
+          parentSite: s.parentSite,
+          cpds: [],
+          criticalCount: 0,
+          warningCount: 0,
+          totalSalas: 0,
+        });
       }
-      const group = map.get(key)!;
-      group.salas.push(s);
-      if (s.criticalPdus > 0) group.criticalCount += 1;
-      else if (s.warningPdus > 0) group.warningCount += 1;
+      const sg = siteMap.get(siteKey)!;
+
+      const cpdKey = `${s.country}||${s.site}`;
+      let cpd = sg.cpds.find(c => `${c.country}||${c.site}` === cpdKey);
+      if (!cpd) {
+        cpd = {
+          country: s.country,
+          site: s.site,
+          cpdName: s.cpdName,
+          salas: [],
+          criticalCount: 0,
+          warningCount: 0,
+        };
+        sg.cpds.push(cpd);
+      }
+      cpd.salas.push(s);
+      if (s.criticalPdus > 0) {
+        cpd.criticalCount += 1;
+        sg.criticalCount += 1;
+      } else if (s.warningPdus > 0) {
+        cpd.warningCount += 1;
+        sg.warningCount += 1;
+      }
+      sg.totalSalas += 1;
     });
 
-    const groups = Array.from(map.values());
-    groups.forEach(g => {
-      g.salas.sort((a, b) => {
-        if (b.criticalPdus !== a.criticalPdus) return b.criticalPdus - a.criticalPdus;
-        if (b.warningPdus !== a.warningPdus) return b.warningPdus - a.warningPdus;
-        return a.dc.localeCompare(b.dc);
+    const groups = Array.from(siteMap.values());
+    groups.forEach(sg => {
+      sg.cpds.forEach(cpd => {
+        cpd.salas.sort((a, b) => {
+          if (b.criticalPdus !== a.criticalPdus) return b.criticalPdus - a.criticalPdus;
+          if (b.warningPdus !== a.warningPdus) return b.warningPdus - a.warningPdus;
+          return a.salaName.localeCompare(b.salaName, undefined, { numeric: true });
+        });
+      });
+      sg.cpds.sort((a, b) => {
+        if (b.criticalCount !== a.criticalCount) return b.criticalCount - a.criticalCount;
+        if (b.warningCount !== a.warningCount) return b.warningCount - a.warningCount;
+        return a.cpdName.localeCompare(b.cpdName);
       });
     });
 
@@ -219,7 +295,7 @@ export default function DashboardPage({
       if (b.warningCount !== a.warningCount) return b.warningCount - a.warningCount;
       const countryCmp = a.country.localeCompare(b.country);
       if (countryCmp !== 0) return countryCmp;
-      return a.site.localeCompare(b.site);
+      return a.parentSite.localeCompare(b.parentSite);
     });
 
     return groups;
@@ -332,68 +408,96 @@ export default function DashboardPage({
           </p>
         </div>
       ) : (
-        <div className="space-y-6">
-          {cpdGroups.map(group => {
-            const groupTone: 'red' | 'amber' | 'emerald' =
-              group.criticalCount > 0 ? 'red' : group.warningCount > 0 ? 'amber' : 'emerald';
-            const tones = {
-              red: { border: 'border-red-200', bg: 'bg-red-50/40', icon: 'text-red-600', badge: 'bg-red-100 text-red-700' },
-              amber: { border: 'border-amber-200', bg: 'bg-amber-50/40', icon: 'text-amber-600', badge: 'bg-amber-100 text-amber-700' },
-              emerald: { border: 'border-emerald-200', bg: 'bg-emerald-50/40', icon: 'text-emerald-600', badge: 'bg-emerald-100 text-emerald-700' },
-            } as const;
-            const t = tones[groupTone];
-            const headerIcon =
-              groupTone === 'red' ? <ShieldAlert className={`h-5 w-5 ${t.icon}`} />
-              : groupTone === 'amber' ? <AlertTriangle className={`h-5 w-5 ${t.icon}`} />
-              : <CheckCircle2 className={`h-5 w-5 ${t.icon}`} />;
-
-            return (
-              <div key={`${group.country}-${group.site}`} className={`rounded-xl border-2 ${t.border} ${t.bg} p-5`}>
-                <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
-                  <div className="flex items-center gap-3">
-                    {headerIcon}
-                    <div>
-                      <div className="flex items-center gap-1.5 text-xs text-gray-500">
-                        <MapPin className="h-3 w-3" />
-                        <span className="font-medium">{group.country}</span>
-                      </div>
-                      <h2 className="text-lg font-bold text-gray-900">{group.site}</h2>
-                    </div>
+        <div className="space-y-8">
+          {siteGroups.map(siteGroup => (
+            <div
+              key={`${siteGroup.country}-${siteGroup.parentSite}`}
+              className="rounded-2xl border-2 border-slate-300 bg-white shadow-sm p-6"
+            >
+              <div className="flex items-center justify-between mb-5 flex-wrap gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="bg-slate-100 p-2.5 rounded-xl">
+                    <Building className="h-6 w-6 text-slate-700" />
                   </div>
-                  <div className="flex items-center gap-2">
-                    <span className={`text-xs font-bold px-3 py-1 rounded-full ${t.badge}`}>
-                      {group.salas.length} sala{group.salas.length !== 1 ? 's' : ''}
-                    </span>
-                    {group.criticalCount > 0 && (
-                      <span className="text-xs font-bold px-3 py-1 rounded-full bg-red-100 text-red-700">
-                        {group.criticalCount} critica{group.criticalCount !== 1 ? 's' : ''}
-                      </span>
-                    )}
-                    {group.warningCount > 0 && (
-                      <span className="text-xs font-bold px-3 py-1 rounded-full bg-amber-100 text-amber-700">
-                        {group.warningCount} advertencia{group.warningCount !== 1 ? 's' : ''}
-                      </span>
-                    )}
+                  <div>
+                    <div className="flex items-center gap-1.5 text-xs text-slate-500">
+                      <MapPin className="h-3 w-3" />
+                      <span className="font-medium">{siteGroup.country}</span>
+                    </div>
+                    <h2 className="text-xl font-bold text-slate-900 tracking-tight">
+                      CPD {siteGroup.parentSite}
+                    </h2>
                   </div>
                 </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                  {group.salas.map(s => {
-                    const salaTone: 'critical' | 'warning' | 'normal' =
-                      s.criticalPdus > 0 ? 'critical' : s.warningPdus > 0 ? 'warning' : 'normal';
-                    return (
-                      <DcCard
-                        key={`${s.country}-${s.site}-${s.dc}`}
-                        summary={s}
-                        tone={salaTone}
-                        onClick={salaTone !== 'normal' ? onOpenAlertas : undefined}
-                      />
-                    );
-                  })}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs font-semibold px-3 py-1 rounded-full bg-slate-100 text-slate-700 border border-slate-200">
+                    {siteGroup.cpds.length} CPD{siteGroup.cpds.length !== 1 ? 's' : ''}
+                  </span>
+                  <span className="text-xs font-semibold px-3 py-1 rounded-full bg-slate-100 text-slate-700 border border-slate-200">
+                    {siteGroup.totalSalas} sala{siteGroup.totalSalas !== 1 ? 's' : ''}
+                  </span>
+                  {siteGroup.criticalCount > 0 && (
+                    <span className="text-xs font-bold px-3 py-1 rounded-full bg-red-100 text-red-700 border border-red-200">
+                      {siteGroup.criticalCount} critica{siteGroup.criticalCount !== 1 ? 's' : ''}
+                    </span>
+                  )}
+                  {siteGroup.warningCount > 0 && (
+                    <span className="text-xs font-bold px-3 py-1 rounded-full bg-amber-100 text-amber-700 border border-amber-200">
+                      {siteGroup.warningCount} advertencia{siteGroup.warningCount !== 1 ? 's' : ''}
+                    </span>
+                  )}
                 </div>
               </div>
-            );
-          })}
+
+              <div className="space-y-5">
+                {siteGroup.cpds.map(cpd => (
+                  <div
+                    key={`${cpd.country}-${cpd.site}`}
+                    className="rounded-xl border border-slate-200 bg-slate-50/60 p-4"
+                  >
+                    <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                      <div className="flex items-center gap-2">
+                        <Server className="h-4 w-4 text-slate-600" />
+                        <h3 className="text-base font-semibold text-slate-800">
+                          CPD {cpd.site}
+                        </h3>
+                      </div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-white text-slate-600 border border-slate-200">
+                          {cpd.salas.length} sala{cpd.salas.length !== 1 ? 's' : ''}
+                        </span>
+                        {cpd.criticalCount > 0 && (
+                          <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-red-100 text-red-700">
+                            {cpd.criticalCount} critica{cpd.criticalCount !== 1 ? 's' : ''}
+                          </span>
+                        )}
+                        {cpd.warningCount > 0 && (
+                          <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-700">
+                            {cpd.warningCount} advertencia{cpd.warningCount !== 1 ? 's' : ''}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-4">
+                      {cpd.salas.map(s => {
+                        const salaTone: 'critical' | 'warning' | 'normal' =
+                          s.criticalPdus > 0 ? 'critical' : s.warningPdus > 0 ? 'warning' : 'normal';
+                        return (
+                          <DcCard
+                            key={`${s.country}-${s.site}-${s.dc}`}
+                            summary={s}
+                            tone={salaTone}
+                            onClick={salaTone !== 'normal' ? onOpenAlertas : undefined}
+                          />
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
         </div>
       )}
     </div>
@@ -515,25 +619,25 @@ function DcCard({ summary, tone, onClick }: DcCardProps) {
     ? Math.round(((summary.totalPdus - summary.criticalPdus - summary.warningPdus) / summary.totalPdus) * 100)
     : 100;
 
+  const cardTint =
+    tone === 'critical' ? 'bg-red-50' : tone === 'warning' ? 'bg-amber-50' : 'bg-emerald-50';
+
   return (
     <div
       onClick={onClick}
-      className={`relative bg-white rounded-xl border-2 ${t.border} shadow-sm hover:shadow-md transition-all overflow-hidden ${onClick ? 'cursor-pointer' : ''}`}
+      className={`relative ${cardTint} rounded-xl border-2 ${t.border} shadow-sm hover:shadow-md transition-all overflow-hidden ${onClick ? 'cursor-pointer' : ''}`}
     >
       <div className={`absolute left-0 top-0 h-full w-1.5 ${t.leftBar}`}></div>
 
       <div className="p-5 pl-6">
         <div className="flex items-start justify-between mb-3">
           <div>
-            <div className="flex items-center gap-1.5 text-xs text-gray-500 mb-1">
-              <MapPin className="h-3 w-3" />
-              <span className="font-medium">{summary.country}</span>
-              <span>/</span>
-              <span className="font-medium">{summary.site}</span>
+            <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold mb-1">
+              Sala tecnica
             </div>
             <div className="flex items-center gap-2">
               <Building className={`h-5 w-5 ${tone === 'normal' ? 'text-emerald-600' : tone === 'warning' ? 'text-amber-600' : 'text-red-600'}`} />
-              <h3 className="text-lg font-bold text-gray-900">{summary.dc}</h3>
+              <h3 className="text-lg font-bold text-gray-900">{summary.salaName}</h3>
             </div>
           </div>
           {tone !== 'normal' && (
@@ -579,7 +683,7 @@ function DcCard({ summary, tone, onClick }: DcCardProps) {
 
 function Metric({ label, value }: { label: string; value: number | string }) {
   return (
-    <div className="bg-gray-50 rounded-lg px-2.5 py-2 text-center border border-gray-100">
+    <div className="bg-white/80 rounded-lg px-2.5 py-2 text-center border border-gray-200">
       <div className="text-[10px] uppercase tracking-wide text-gray-500 font-medium">{label}</div>
       <div className="text-base font-bold text-gray-900">{value}</div>
     </div>
