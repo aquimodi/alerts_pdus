@@ -300,13 +300,69 @@ async function ensureRackThresholdOverridesColumns() {
         BEGIN
           ALTER TABLE dbo.rack_threshold_overrides ADD comentario NVARCHAR(MAX) NULL;
         END
+
+        IF NOT EXISTS (
+          SELECT 1 FROM sys.columns
+          WHERE Name = N'updated_by'
+          AND Object_ID = Object_ID(N'dbo.rack_threshold_overrides')
+        )
+        BEGIN
+          ALTER TABLE dbo.rack_threshold_overrides ADD updated_by NVARCHAR(100) NULL;
+        END
       `);
     });
-    logger.debug('rack_threshold_overrides.comentario column ensured');
+    logger.debug('rack_threshold_overrides.comentario and updated_by columns ensured');
   } catch (error) {
-    logger.error('Error ensuring comentario column', { error: error.message });
+    logger.error('Error ensuring comentario/updated_by columns', { error: error.message });
   }
 }
+
+// Simple in-memory rate limiter for sensitive endpoints.
+// Keyed by identifier (e.g. userId or IP), enforces maxRequests per windowMs.
+const rateLimitBuckets = new Map();
+function createRateLimiter({ windowMs, maxRequests, keyFn, name }) {
+  return (req, res, next) => {
+    try {
+      const key = `${name}:${keyFn(req)}`;
+      const now = Date.now();
+      const bucket = rateLimitBuckets.get(key);
+      if (!bucket || now > bucket.resetAt) {
+        rateLimitBuckets.set(key, { count: 1, resetAt: now + windowMs });
+        return next();
+      }
+      if (bucket.count >= maxRequests) {
+        const retryAfter = Math.ceil((bucket.resetAt - now) / 1000);
+        res.setHeader('Retry-After', String(retryAfter));
+        return res.status(429).json({
+          success: false,
+          message: 'Demasiadas solicitudes. Intente nuevamente en unos segundos.',
+          retryAfter,
+          timestamp: new Date().toISOString()
+        });
+      }
+      bucket.count += 1;
+      return next();
+    } catch (err) {
+      return next();
+    }
+  };
+}
+
+// Periodic cleanup of expired rate limit buckets to prevent memory growth.
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, bucket] of rateLimitBuckets.entries()) {
+    if (now > bucket.resetAt) rateLimitBuckets.delete(key);
+  }
+}, 5 * 60 * 1000).unref?.();
+
+// Validate that a string is a well-formed RFC 4122 UUID/GUID.
+const GUID_REGEX = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+function isValidGuid(value) {
+  return typeof value === 'string' && GUID_REGEX.test(value);
+}
+
+const MAX_COMENTARIO_LENGTH = 2000;
 
 async function ensureLocationAlertConfigTable() {
   try {
@@ -3383,6 +3439,7 @@ app.get('/api/rack-threshold-overrides', requireAuth, async (req, res) => {
           value,
           unit,
           comentario,
+          updated_by,
           created_at,
           updated_at
         FROM dbo.rack_threshold_overrides
@@ -3407,15 +3464,33 @@ app.get('/api/rack-threshold-overrides', requireAuth, async (req, res) => {
   }
 });
 
+// Per-user rate limiter for the comentario update endpoint.
+// Limits each authenticated user to 30 updates per minute.
+const comentarioUpdateLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  maxRequests: 30,
+  name: 'rack-override-comentario',
+  keyFn: (req) => (req.session && req.session.userId) || req.ip || 'anonymous'
+});
+
 // Update the comentario for a specific rack threshold override
 // Editable by all authenticated users EXCEPT 'Observador'
 app.put('/api/rack-threshold-overrides/:id/comentario',
   requireAuth,
   requireRole('Administrador', 'Operador', 'Tecnico'),
+  comentarioUpdateLimiter,
   async (req, res) => {
     try {
       const { id } = req.params;
-      const { comentario } = req.body;
+      const { comentario } = req.body || {};
+
+      if (!isValidGuid(id)) {
+        return res.status(400).json({
+          success: false,
+          message: 'El identificador proporcionado no es valido',
+          timestamp: new Date().toISOString()
+        });
+      }
 
       if (typeof comentario !== 'string') {
         return res.status(400).json({
@@ -3425,13 +3500,28 @@ app.put('/api/rack-threshold-overrides/:id/comentario',
         });
       }
 
+      const normalizedComentario = comentario.trim();
+
+      if (normalizedComentario.length > MAX_COMENTARIO_LENGTH) {
+        return res.status(400).json({
+          success: false,
+          message: `El comentario no puede superar ${MAX_COMENTARIO_LENGTH} caracteres`,
+          maxLength: MAX_COMENTARIO_LENGTH,
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      const updatedBy = (req.session && req.session.usuario) || null;
+
       const result = await executeQuery(async (pool) => {
         return await pool.request()
           .input('id', sql.UniqueIdentifier, id)
-          .input('comentario', sql.NVarChar(sql.MAX), comentario)
+          .input('comentario', sql.NVarChar(MAX_COMENTARIO_LENGTH), normalizedComentario)
+          .input('updatedBy', sql.NVarChar(100), updatedBy)
           .query(`
             UPDATE dbo.rack_threshold_overrides
             SET comentario = @comentario,
+                updated_by = @updatedBy,
                 updated_at = GETDATE()
             WHERE id = @id
           `);
@@ -3445,6 +3535,13 @@ app.put('/api/rack-threshold-overrides/:id/comentario',
         });
       }
 
+      logger.info('Rack threshold override comentario updated', {
+        id,
+        userId: req.session.userId,
+        usuario: updatedBy,
+        comentarioLength: normalizedComentario.length
+      });
+
       res.json({
         success: true,
         message: 'Comentario actualizado correctamente',
@@ -3453,12 +3550,12 @@ app.put('/api/rack-threshold-overrides/:id/comentario',
     } catch (error) {
       logger.error('Error updating rack threshold override comentario', {
         error: error.message,
-        id: req.params.id
+        id: req.params.id,
+        userId: req.session && req.session.userId
       });
       res.status(500).json({
         success: false,
         message: 'Error al actualizar el comentario',
-        error: error.message,
         timestamp: new Date().toISOString()
       });
     }

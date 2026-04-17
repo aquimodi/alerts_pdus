@@ -17,9 +17,12 @@ interface RackOverride {
   value: number;
   unit: string | null;
   comentario: string | null;
+  updated_by: string | null;
   created_at: string;
   updated_at: string;
 }
+
+const MAX_COMENTARIO_LENGTH = 2000;
 
 interface RackOverridesManagerProps {
   readOnly?: boolean;
@@ -106,6 +109,11 @@ export default function RackOverridesManager({ readOnly = false }: RackOverrides
   };
 
   const saveComment = async (id: string) => {
+    const normalized = editingValue.trim();
+    if (normalized.length > MAX_COMENTARIO_LENGTH) {
+      setError(`El comentario no puede superar ${MAX_COMENTARIO_LENGTH} caracteres`);
+      return;
+    }
     try {
       setSavingId(id);
       setError(null);
@@ -114,7 +122,7 @@ export default function RackOverridesManager({ readOnly = false }: RackOverrides
         method: 'PUT',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ comentario: editingValue }),
+        body: JSON.stringify({ comentario: normalized }),
       });
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));
@@ -123,7 +131,7 @@ export default function RackOverridesManager({ readOnly = false }: RackOverrides
       setOverrides((prev) =>
         prev.map((item) =>
           item.id === id
-            ? { ...item, comentario: editingValue, updated_at: new Date().toISOString() }
+            ? { ...item, comentario: normalized, updated_at: new Date().toISOString() }
             : item
         )
       );
@@ -256,13 +264,25 @@ export default function RackOverridesManager({ readOnly = false }: RackOverrides
                     </td>
                     <td className="px-4 py-3 text-sm text-gray-700 max-w-md">
                       {isEditing ? (
-                        <textarea
-                          value={editingValue}
-                          onChange={(e) => setEditingValue(e.target.value)}
-                          rows={2}
-                          className="w-full text-sm border border-gray-300 rounded-md p-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                          placeholder="Agregar un comentario..."
-                        />
+                        <div>
+                          <textarea
+                            value={editingValue}
+                            onChange={(e) => setEditingValue(e.target.value)}
+                            rows={2}
+                            maxLength={MAX_COMENTARIO_LENGTH}
+                            className="w-full text-sm border border-gray-300 rounded-md p-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                            placeholder="Agregar un comentario..."
+                          />
+                          <div
+                            className={`mt-1 text-xs text-right ${
+                              editingValue.length > MAX_COMENTARIO_LENGTH
+                                ? 'text-red-600 font-medium'
+                                : 'text-gray-400'
+                            }`}
+                          >
+                            {editingValue.length} / {MAX_COMENTARIO_LENGTH}
+                          </div>
+                        </div>
                       ) : o.comentario ? (
                         <div className="flex items-start gap-1">
                           <MessageSquare className="h-3.5 w-3.5 text-gray-400 mt-0.5 flex-shrink-0" />
@@ -273,7 +293,10 @@ export default function RackOverridesManager({ readOnly = false }: RackOverrides
                       )}
                     </td>
                     <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">
-                      {new Date(o.updated_at).toLocaleString()}
+                      <div>{new Date(o.updated_at).toLocaleString()}</div>
+                      {o.updated_by && (
+                        <div className="text-[11px] text-gray-400 mt-0.5">por {o.updated_by}</div>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-right text-sm whitespace-nowrap">
                       {readOnly ? (
@@ -282,7 +305,7 @@ export default function RackOverridesManager({ readOnly = false }: RackOverrides
                         <div className="flex items-center justify-end gap-2">
                           <button
                             onClick={() => saveComment(o.id)}
-                            disabled={savingId === o.id}
+                            disabled={savingId === o.id || editingValue.length > MAX_COMENTARIO_LENGTH}
                             className="inline-flex items-center px-2.5 py-1.5 text-xs font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50"
                           >
                             <Save className="h-3.5 w-3.5 mr-1" />
