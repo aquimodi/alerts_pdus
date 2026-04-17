@@ -1180,7 +1180,7 @@ function App() {
                     }`}
                   >
                     <Activity className="h-4 w-4 inline mr-2" />
-                    Principal
+                    Monitoreo
                   </button>
                   <button
                     onClick={() => { setActiveView('alertas'); setShowThresholds(false); }}
