@@ -192,9 +192,38 @@ export default function DashboardPage({
     );
   }, [dcSummaries]);
 
-  const dcsWithCritical = dcSummaries.filter(s => s.criticalPdus > 0);
-  const dcsWithWarning = dcSummaries.filter(s => s.criticalPdus === 0 && s.warningPdus > 0);
-  const dcsHealthy = dcSummaries.filter(s => s.criticalPdus === 0 && s.warningPdus === 0);
+  const cpdGroups = useMemo(() => {
+    const map = new Map<string, { country: string; site: string; salas: DcSummary[]; criticalCount: number; warningCount: number }>();
+    dcSummaries.forEach(s => {
+      const key = `${s.country}||${s.site}`;
+      if (!map.has(key)) {
+        map.set(key, { country: s.country, site: s.site, salas: [], criticalCount: 0, warningCount: 0 });
+      }
+      const group = map.get(key)!;
+      group.salas.push(s);
+      if (s.criticalPdus > 0) group.criticalCount += 1;
+      else if (s.warningPdus > 0) group.warningCount += 1;
+    });
+
+    const groups = Array.from(map.values());
+    groups.forEach(g => {
+      g.salas.sort((a, b) => {
+        if (b.criticalPdus !== a.criticalPdus) return b.criticalPdus - a.criticalPdus;
+        if (b.warningPdus !== a.warningPdus) return b.warningPdus - a.warningPdus;
+        return a.dc.localeCompare(b.dc);
+      });
+    });
+
+    groups.sort((a, b) => {
+      if (b.criticalCount !== a.criticalCount) return b.criticalCount - a.criticalCount;
+      if (b.warningCount !== a.warningCount) return b.warningCount - a.warningCount;
+      const countryCmp = a.country.localeCompare(b.country);
+      if (countryCmp !== 0) return countryCmp;
+      return a.site.localeCompare(b.site);
+    });
+
+    return groups;
+  }, [dcSummaries]);
 
   const formatTime = (date: Date) =>
     date.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -303,55 +332,69 @@ export default function DashboardPage({
           </p>
         </div>
       ) : (
-        <>
-          {dcsWithCritical.length > 0 && (
-            <Section
-              title="Salas con alertas criticas"
-              description="Estas salas requieren atencion inmediata"
-              icon={<ShieldAlert className="h-5 w-5 text-red-600" />}
-              tone="red"
-              count={dcsWithCritical.length}
-            >
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                {dcsWithCritical.map(s => (
-                  <DcCard key={`${s.country}-${s.site}-${s.dc}`} summary={s} tone="critical" onClick={onOpenAlertas} />
-                ))}
-              </div>
-            </Section>
-          )}
+        <div className="space-y-6">
+          {cpdGroups.map(group => {
+            const groupTone: 'red' | 'amber' | 'emerald' =
+              group.criticalCount > 0 ? 'red' : group.warningCount > 0 ? 'amber' : 'emerald';
+            const tones = {
+              red: { border: 'border-red-200', bg: 'bg-red-50/40', icon: 'text-red-600', badge: 'bg-red-100 text-red-700' },
+              amber: { border: 'border-amber-200', bg: 'bg-amber-50/40', icon: 'text-amber-600', badge: 'bg-amber-100 text-amber-700' },
+              emerald: { border: 'border-emerald-200', bg: 'bg-emerald-50/40', icon: 'text-emerald-600', badge: 'bg-emerald-100 text-emerald-700' },
+            } as const;
+            const t = tones[groupTone];
+            const headerIcon =
+              groupTone === 'red' ? <ShieldAlert className={`h-5 w-5 ${t.icon}`} />
+              : groupTone === 'amber' ? <AlertTriangle className={`h-5 w-5 ${t.icon}`} />
+              : <CheckCircle2 className={`h-5 w-5 ${t.icon}`} />;
 
-          {dcsWithWarning.length > 0 && (
-            <Section
-              title="Salas con advertencias"
-              description="Monitorear evolucion de los parametros"
-              icon={<AlertTriangle className="h-5 w-5 text-amber-600" />}
-              tone="amber"
-              count={dcsWithWarning.length}
-            >
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                {dcsWithWarning.map(s => (
-                  <DcCard key={`${s.country}-${s.site}-${s.dc}`} summary={s} tone="warning" onClick={onOpenAlertas} />
-                ))}
-              </div>
-            </Section>
-          )}
+            return (
+              <div key={`${group.country}-${group.site}`} className={`rounded-xl border-2 ${t.border} ${t.bg} p-5`}>
+                <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+                  <div className="flex items-center gap-3">
+                    {headerIcon}
+                    <div>
+                      <div className="flex items-center gap-1.5 text-xs text-gray-500">
+                        <MapPin className="h-3 w-3" />
+                        <span className="font-medium">{group.country}</span>
+                      </div>
+                      <h2 className="text-lg font-bold text-gray-900">{group.site}</h2>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className={`text-xs font-bold px-3 py-1 rounded-full ${t.badge}`}>
+                      {group.salas.length} sala{group.salas.length !== 1 ? 's' : ''}
+                    </span>
+                    {group.criticalCount > 0 && (
+                      <span className="text-xs font-bold px-3 py-1 rounded-full bg-red-100 text-red-700">
+                        {group.criticalCount} critica{group.criticalCount !== 1 ? 's' : ''}
+                      </span>
+                    )}
+                    {group.warningCount > 0 && (
+                      <span className="text-xs font-bold px-3 py-1 rounded-full bg-amber-100 text-amber-700">
+                        {group.warningCount} advertencia{group.warningCount !== 1 ? 's' : ''}
+                      </span>
+                    )}
+                  </div>
+                </div>
 
-          {dcsHealthy.length > 0 && (
-            <Section
-              title="Salas operativas"
-              description="Sin alertas activas"
-              icon={<CheckCircle2 className="h-5 w-5 text-emerald-600" />}
-              tone="emerald"
-              count={dcsHealthy.length}
-            >
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                {dcsHealthy.map(s => (
-                  <DcCard key={`${s.country}-${s.site}-${s.dc}`} summary={s} tone="normal" />
-                ))}
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                  {group.salas.map(s => {
+                    const salaTone: 'critical' | 'warning' | 'normal' =
+                      s.criticalPdus > 0 ? 'critical' : s.warningPdus > 0 ? 'warning' : 'normal';
+                    return (
+                      <DcCard
+                        key={`${s.country}-${s.site}-${s.dc}`}
+                        summary={s}
+                        tone={salaTone}
+                        onClick={salaTone !== 'normal' ? onOpenAlertas : undefined}
+                      />
+                    );
+                  })}
+                </div>
               </div>
-            </Section>
-          )}
-        </>
+            );
+          })}
+        </div>
       )}
     </div>
   );
