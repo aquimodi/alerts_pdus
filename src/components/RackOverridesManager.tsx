@@ -8,6 +8,7 @@ import {
   Search,
   MessageSquare,
   X as XIcon,
+  Pencil,
 } from 'lucide-react';
 
 interface RackOverride {
@@ -26,6 +27,12 @@ const MAX_COMENTARIO_LENGTH = 2000;
 
 interface RackOverridesManagerProps {
   readOnly?: boolean;
+  canEditValue?: boolean;
+}
+
+interface RackNameEntry {
+  rackId: string;
+  name: string;
 }
 
 const THRESHOLD_LABELS: Record<string, string> = {
@@ -51,7 +58,10 @@ const THRESHOLD_LABELS: Record<string, string> = {
   warning_voltage_high: 'Voltaje Advertencia Alto',
 };
 
-export default function RackOverridesManager({ readOnly = false }: RackOverridesManagerProps) {
+export default function RackOverridesManager({
+  readOnly = false,
+  canEditValue = false,
+}: RackOverridesManagerProps) {
   const [overrides, setOverrides] = useState<RackOverride[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -60,6 +70,28 @@ export default function RackOverridesManager({ readOnly = false }: RackOverrides
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingValue, setEditingValue] = useState('');
   const [savingId, setSavingId] = useState<string | null>(null);
+  const [rackNames, setRackNames] = useState<Record<string, string>>({});
+  const [editingValueId, setEditingValueId] = useState<string | null>(null);
+  const [editingValueNumber, setEditingValueNumber] = useState<string>('');
+  const [savingValueId, setSavingValueId] = useState<string | null>(null);
+
+  const fetchRackNames = async () => {
+    try {
+      const response = await fetch('/api/racks/energy', { credentials: 'include' });
+      if (!response.ok) return;
+      const json = await response.json();
+      const list: RackNameEntry[] = json?.data || json?.racks || [];
+      const map: Record<string, string> = {};
+      for (const entry of list) {
+        if (entry && entry.rackId && entry.name) {
+          map[String(entry.rackId)] = String(entry.name);
+        }
+      }
+      setRackNames(map);
+    } catch {
+      // Silently ignore; fallback to rack_id in UI.
+    }
+  };
 
   const fetchOverrides = async () => {
     try {
@@ -82,21 +114,73 @@ export default function RackOverridesManager({ readOnly = false }: RackOverrides
 
   useEffect(() => {
     fetchOverrides();
+    fetchRackNames();
   }, []);
+
+  const getRackDisplayName = (rackId: string): string => rackNames[rackId] || rackId;
 
   const filtered = useMemo(() => {
     const term = search.trim().toLowerCase();
     if (!term) return overrides;
     return overrides.filter((o) => {
       const label = THRESHOLD_LABELS[o.threshold_key] || o.threshold_key;
+      const displayName = getRackDisplayName(o.rack_id);
       return (
         o.rack_id.toLowerCase().includes(term) ||
+        displayName.toLowerCase().includes(term) ||
         o.threshold_key.toLowerCase().includes(term) ||
         label.toLowerCase().includes(term) ||
         (o.comentario || '').toLowerCase().includes(term)
       );
     });
-  }, [overrides, search]);
+  }, [overrides, search, rackNames]);
+
+  const startValueEdit = (o: RackOverride) => {
+    setEditingValueId(o.id);
+    setEditingValueNumber(String(o.value));
+  };
+
+  const cancelValueEdit = () => {
+    setEditingValueId(null);
+    setEditingValueNumber('');
+  };
+
+  const saveValue = async (id: string) => {
+    const parsed = Number(editingValueNumber);
+    if (!Number.isFinite(parsed)) {
+      setError('El valor debe ser un numero valido');
+      return;
+    }
+    try {
+      setSavingValueId(id);
+      setError(null);
+      setSuccess(null);
+      const response = await fetch(`/api/rack-threshold-overrides/${id}/value`, {
+        method: 'PUT',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: parsed }),
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.message || 'Error al guardar el valor');
+      }
+      setOverrides((prev) =>
+        prev.map((item) =>
+          item.id === id
+            ? { ...item, value: parsed, updated_at: new Date().toISOString() }
+            : item
+        )
+      );
+      setSuccess('Valor actualizado correctamente');
+      cancelValueEdit();
+      setTimeout(() => setSuccess(null), 2500);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Error al guardar el valor');
+    } finally {
+      setSavingValueId(null);
+    }
+  };
 
   const startEdit = (o: RackOverride) => {
     setEditingId(o.id);
@@ -164,7 +248,10 @@ export default function RackOverridesManager({ readOnly = false }: RackOverrides
             />
           </div>
           <button
-            onClick={fetchOverrides}
+            onClick={() => {
+              fetchOverrides();
+              fetchRackNames();
+            }}
             className="inline-flex items-center px-3 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 transition-colors"
             title="Actualizar listado"
           >
@@ -243,7 +330,12 @@ export default function RackOverridesManager({ readOnly = false }: RackOverrides
                 return (
                   <tr key={o.id} className="hover:bg-gray-50">
                     <td className="px-4 py-3 text-sm font-medium text-gray-900 whitespace-nowrap">
-                      {o.rack_id}
+                      <div className="font-semibold">{getRackDisplayName(o.rack_id)}</div>
+                      {rackNames[o.rack_id] && (
+                        <div className="text-[11px] text-gray-400 font-mono mt-0.5">
+                          {o.rack_id}
+                        </div>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-sm">
                       <div className="flex items-center gap-2">
@@ -259,8 +351,48 @@ export default function RackOverridesManager({ readOnly = false }: RackOverrides
                       </div>
                     </td>
                     <td className="px-4 py-3 text-right text-sm font-mono text-gray-900 whitespace-nowrap">
-                      {Number(o.value).toString()}
-                      {o.unit ? <span className="text-xs text-gray-500 ml-1">{o.unit}</span> : null}
+                      {canEditValue && editingValueId === o.id ? (
+                        <div className="flex items-center justify-end gap-2">
+                          <input
+                            type="number"
+                            step="any"
+                            value={editingValueNumber}
+                            onChange={(e) => setEditingValueNumber(e.target.value)}
+                            className="w-24 text-right text-sm border border-gray-300 rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                          />
+                          {o.unit && <span className="text-xs text-gray-500">{o.unit}</span>}
+                          <button
+                            onClick={() => saveValue(o.id)}
+                            disabled={savingValueId === o.id}
+                            className="inline-flex items-center px-2 py-1 text-xs font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50"
+                            title="Guardar valor"
+                          >
+                            <Save className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            onClick={cancelValueEdit}
+                            disabled={savingValueId === o.id}
+                            className="inline-flex items-center px-2 py-1 text-xs font-medium rounded-md text-gray-700 bg-white border border-gray-300 hover:bg-gray-50 disabled:opacity-50"
+                            title="Cancelar"
+                          >
+                            <XIcon className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-end gap-2">
+                          <span>{Number(o.value).toString()}</span>
+                          {o.unit ? <span className="text-xs text-gray-500">{o.unit}</span> : null}
+                          {canEditValue && (
+                            <button
+                              onClick={() => startValueEdit(o)}
+                              className="inline-flex items-center px-1.5 py-1 text-xs font-medium rounded-md text-blue-700 bg-blue-50 border border-blue-200 hover:bg-blue-100"
+                              title="Editar valor (solo Administrador)"
+                            >
+                              <Pencil className="h-3 w-3" />
+                            </button>
+                          )}
+                        </div>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-sm text-gray-700 max-w-md">
                       {isEditing ? (

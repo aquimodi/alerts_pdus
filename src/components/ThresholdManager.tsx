@@ -244,7 +244,10 @@ export default function ThresholdManager({ thresholds, onSaveSuccess, onClose }:
       {activeTab === 'users' ? (
         <UserManagement readOnly={!isAdmin} />
       ) : activeTab === 'rackOverrides' ? (
-        <RackOverridesManager readOnly={user?.rol === 'Observador'} />
+        <RackOverridesManager
+          readOnly={user?.rol === 'Observador'}
+          canEditValue={user?.rol === 'Administrador'}
+        />
       ) : (
         <>
           <div className="mb-6">

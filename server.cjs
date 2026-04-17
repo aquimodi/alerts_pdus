@@ -3562,6 +3562,101 @@ app.put('/api/rack-threshold-overrides/:id/comentario',
   }
 );
 
+// Per-user rate limiter for the value update endpoint.
+const valueUpdateLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  maxRequests: 30,
+  name: 'rack-override-value',
+  keyFn: (req) => (req.session && req.session.userId) || req.ip || 'anonymous'
+});
+
+// Update the numeric value of a specific rack threshold override.
+// Only Administrador can modify the values.
+app.put('/api/rack-threshold-overrides/:id/value',
+  requireAuth,
+  requireRole('Administrador'),
+  valueUpdateLimiter,
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { value } = req.body || {};
+
+      if (!isValidGuid(id)) {
+        return res.status(400).json({
+          success: false,
+          message: 'El identificador proporcionado no es valido',
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      const numericValue = Number(value);
+      if (!Number.isFinite(numericValue)) {
+        return res.status(400).json({
+          success: false,
+          message: 'El valor debe ser un numero valido',
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      if (numericValue < -1000000 || numericValue > 1000000) {
+        return res.status(400).json({
+          success: false,
+          message: 'El valor esta fuera del rango permitido',
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      const updatedBy = (req.session && req.session.usuario) || null;
+
+      const result = await executeQuery(async (pool) => {
+        return await pool.request()
+          .input('id', sql.UniqueIdentifier, id)
+          .input('value', sql.Decimal(18, 4), numericValue)
+          .input('updatedBy', sql.NVarChar(100), updatedBy)
+          .query(`
+            UPDATE dbo.rack_threshold_overrides
+            SET value = @value,
+                updated_by = @updatedBy,
+                updated_at = GETDATE()
+            WHERE id = @id
+          `);
+      });
+
+      if (result.rowsAffected[0] === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'Registro no encontrado',
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      logger.info('Rack threshold override value updated', {
+        id,
+        userId: req.session.userId,
+        usuario: updatedBy,
+        value: numericValue
+      });
+
+      res.json({
+        success: true,
+        message: 'Valor actualizado correctamente',
+        timestamp: new Date().toISOString()
+      });
+    } catch (error) {
+      logger.error('Error updating rack threshold override value', {
+        error: error.message,
+        id: req.params.id,
+        userId: req.session && req.session.userId
+      });
+      res.status(500).json({
+        success: false,
+        message: 'Error al actualizar el valor',
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+);
+
 // ============================================
 // MAINTENANCE MODE ENDPOINTS
 // ============================================
