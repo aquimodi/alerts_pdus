@@ -1,10 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Routes, Route } from 'react-router-dom';
-import { Activity, TriangleAlert as AlertTriangle, Settings, ChartBar as BarChart3, Zap, Download, RefreshCw, Wrench, LogOut, User, ChevronDown, ChevronUp, Bell, BellOff } from 'lucide-react';
+import { Activity, TriangleAlert as AlertTriangle, Settings, ChartBar as BarChart3, Zap, Download, RefreshCw, Wrench, LogOut, User, ChevronDown, ChevronUp, Bell, BellOff, LayoutDashboard } from 'lucide-react';
 import CountryGroup from './components/CountryGroup';
 import ThresholdManager from './components/ThresholdManager';
 import RackThresholdManager from './components/RackThresholdManager';
 import MaintenancePage from './pages/MaintenancePage';
+import DashboardPage from './pages/DashboardPage';
 import { useRackData } from './hooks/useRackData';
 import { useThresholds } from './hooks/useThresholds';
 import { getThresholdValue } from './utils/thresholdUtils';
@@ -23,7 +24,7 @@ function App() {
   const [exportError, setExportError] = useState<string | null>(null);
   const [showAllDcs, setShowAllDcs] = useState(false);
   const [showAllGateways, setShowAllGateways] = useState(false);
-  const [activeView, setActiveView] = useState<'principal' | 'alertas' | 'mantenimiento'>('principal');
+  const [activeView, setActiveView] = useState<'dashboard' | 'principal' | 'alertas' | 'mantenimiento'>('dashboard');
   const [isGeoFiltersExpanded, setIsGeoFiltersExpanded] = useState(false);
   const [hasInitializedFilters, setHasInitializedFilters] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
@@ -101,7 +102,7 @@ function App() {
     searchField,
     setSearchField,
     refreshData
-  } = useRackData({ forceShowAllRacks: activeView === 'principal' });
+  } = useRackData({ forceShowAllRacks: activeView === 'principal' || activeView === 'dashboard' });
 
   const {
     thresholds,
@@ -1153,6 +1154,20 @@ function App() {
                 <div className="flex items-center bg-gray-100 rounded-lg p-1 gap-1">
                   <button
                     onClick={() => {
+                      setActiveView('dashboard');
+                      setShowThresholds(false);
+                    }}
+                    className={`px-5 py-2.5 rounded-md text-sm font-medium transition-all ${
+                      activeView === 'dashboard'
+                        ? 'bg-blue-600 text-white shadow-md'
+                        : 'text-gray-700 hover:text-gray-900 hover:bg-white'
+                    }`}
+                  >
+                    <LayoutDashboard className="h-4 w-4 inline mr-2" />
+                    Dashboard
+                  </button>
+                  <button
+                    onClick={() => {
                       setActiveView('principal');
                       setActiveStatusFilter('all');
                       setActiveMetricFilter('all');
@@ -1437,7 +1452,7 @@ function App() {
             ) : (
               <>
             {/* Search Bar - Only show when threshold manager is closed and NOT in maintenance view */}
-            {!showRackThresholdsModal && activeView !== 'mantenimiento' && (
+            {!showRackThresholdsModal && activeView !== 'mantenimiento' && activeView !== 'dashboard' && (
               <div className="bg-white rounded-lg shadow mb-6 p-4">
                 <div className="flex items-center space-x-4 flex-wrap gap-2">
                   <label htmlFor="search-input" className="text-sm font-medium text-gray-700 whitespace-nowrap">
@@ -1507,7 +1522,7 @@ function App() {
             )}
 
             {/* Geographical Filters - Only show when threshold manager is closed and NOT in maintenance view */}
-            {!showThresholds && !showRackThresholdsModal && activeView !== 'mantenimiento' && (
+            {!showThresholds && !showRackThresholdsModal && activeView !== 'mantenimiento' && activeView !== 'dashboard' && (
               <div className="bg-white rounded-lg shadow mb-6 overflow-hidden">
                 <div
                   className="flex items-center justify-between p-4 cursor-pointer hover:bg-gray-50 transition-colors"
@@ -1689,7 +1704,19 @@ function App() {
               </div>
             )}
             {/* Main Content */}
-            {activeView === 'mantenimiento' ? (
+            {activeView === 'dashboard' ? (
+              <DashboardPage
+                racks={racks}
+                maintenanceRacks={maintenanceRacks}
+                userHasAccessToSite={userHasAccessToSite}
+                refreshData={refreshData}
+                loading={racksLoading}
+                onOpenAlertas={() => {
+                  setActiveView('alertas');
+                  setShowThresholds(false);
+                }}
+              />
+            ) : activeView === 'mantenimiento' ? (
               <MaintenancePage />
             ) : (
               <>
