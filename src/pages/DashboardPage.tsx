@@ -11,27 +11,24 @@ interface DashboardPageProps {
   loading?: boolean;
 }
 
-function parseDcParts(raw: string, site: string): { cpd: string; sala: string } {
-  const trimmed = (raw || '').trim();
-  if (!trimmed) return { cpd: 'Principal', sala: 'Sin Sala' };
+function parseLocation(site: string): string {
+  const trimmed = (site || '').trim();
+  if (!trimmed) return 'Sin Location';
   const parts = trimmed.split(/\s+/);
-  const siteTrim = (site || '').trim().toLowerCase();
+  return parts[0];
+}
 
-  if (parts.length === 1) {
-    const only = parts[0];
-    if (only.toLowerCase() === siteTrim) {
-      return { cpd: 'Principal', sala: only };
-    }
-    return { cpd: only, sala: only };
+function parseSalaFromDc(dc: string, site: string): string {
+  const dcTrim = (dc || '').trim();
+  if (!dcTrim) return 'Sin Sala';
+  const siteTrim = (site || '').trim();
+  if (siteTrim) {
+    const escaped = siteTrim.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const rest = dcTrim.replace(new RegExp(`\\s*${escaped}\\s*`, 'i'), ' ').trim();
+    if (rest) return rest;
   }
-
-  let cpdIdx = 0;
-  if (parts[0].toLowerCase() === siteTrim && parts.length > 1) {
-    cpdIdx = 1;
-  }
-  const cpd = parts[cpdIdx];
-  const salaRest = parts.slice(cpdIdx + 1).join(' ').trim();
-  return { cpd, sala: salaRest || cpd };
+  const parts = dcTrim.split(/\s+/);
+  return parts[0];
 }
 
 interface DcSummary {
@@ -103,12 +100,13 @@ export default function DashboardPage({
       const key = `${country}||${site}||${dc}`;
 
       if (!map.has(key)) {
-        const { cpd: cpdName, sala: salaName } = parseDcParts(dc, site);
+        const locationName = parseLocation(site);
+        const salaName = parseSalaFromDc(dc, site);
         map.set(key, {
           country,
           site,
-          parentSite: site,
-          cpdName,
+          parentSite: locationName,
+          cpdName: site,
           dc,
           salaName,
           totalRacks: 0,
@@ -468,7 +466,7 @@ export default function DashboardPage({
                       <div className="flex items-center gap-2">
                         <Server className="h-4 w-4 text-slate-600" />
                         <h3 className="text-base font-semibold text-slate-800">
-                          CPD {siteGroup.parentSite} {childLabel}
+                          CPD {childLabel}
                         </h3>
                       </div>
                       <div className="flex items-center gap-2 flex-wrap">
